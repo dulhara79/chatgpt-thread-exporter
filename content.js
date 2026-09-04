@@ -411,26 +411,28 @@
     menu.setAttribute('role', 'menu');
     menu.innerHTML = `
       <div class="cgx-menu-heading">${heading}</div>
-      <button type="button" data-format="pdf" role="menuitem">${formatIcon('pdf')}<span><strong>PDF document</strong><small>Professional A4 · opens Save as PDF</small></span></button>
-      <button type="button" data-format="docx" role="menuitem">${formatIcon('docx')}<span><strong>Microsoft Word</strong><small>Editable .docx with header & page numbers</small></span></button>
-      <button type="button" data-format="md" role="menuitem">${formatIcon('md')}<span><strong>Markdown</strong><small>Clean structured .md file</small></span></button>`;
+      <label class="cgx-page-size"><span>Page size</span><select data-page-size aria-label="Document page size"><option value="A4" selected>A4 (default)</option><option value="Letter">Letter</option><option value="Legal">Legal</option></select></label>
+      <button type="button" data-format="pdf" role="menuitem">${formatIcon('pdf')}<span><strong>PDF document</strong><small>Professional print-ready document</small></span></button>
+      <button type="button" data-format="docx" role="menuitem">${formatIcon('docx')}<span><strong>Microsoft Word</strong><small>Editable .docx with native numbering</small></span></button>
+      <button type="button" data-format="md" role="menuitem">${formatIcon('md')}<span><strong>Markdown</strong><small>Clean semantic .md file</small></span></button>`;
 
     document.body.appendChild(menu);
     positionMenu(menu, anchor);
 
     menu.querySelectorAll('button[data-format]').forEach(button => {
-      button.addEventListener('click', event => {
+      button.addEventListener('click', async event => {
         event.preventDefault();
         event.stopPropagation();
         const format = button.dataset.format;
+        const pageSize = menu.querySelector('[data-page-size]')?.value || 'A4';
         try {
           const data = dataProvider();
           if (!data?.turns?.length) throw new Error('No question-and-answer content was found.');
-          if (format === 'pdf') exporter.exportPdf(data, data.turns);
-          else if (format === 'docx') exporter.exportDocx(data, data.turns);
+          if (format === 'pdf') exporter.exportPdf(data, data.turns, { pageSize });
+          else if (format === 'docx') await exporter.exportDocx(data, data.turns, { pageSize });
           else exporter.exportMarkdown(data, data.turns);
           closeMenu();
-          showToast(format === 'pdf' ? 'Print view opened — choose Save as PDF.' : `Exported ${format === 'docx' ? 'Word document' : 'Markdown file'}.`);
+          showToast(format === 'pdf' ? 'Print view opened (' + pageSize + ') — choose Save as PDF.' : 'Exported ' + (format === 'docx' ? 'Word document (' + pageSize + ')' : 'Markdown file') + '.');
         } catch (error) {
           closeMenu();
           showToast(error?.message || String(error), true);
