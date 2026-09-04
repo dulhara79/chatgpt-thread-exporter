@@ -529,10 +529,13 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
     return tokens;
   }
 
-  function createDocxBlob(data, turns) {
+  function createDocxBlob(data, turns, options = {}) {
     const title = documentTitle(data, turns);
+    const page = PAGE_SIZES[normalizePageSize(options.pageSize)];
     const hyperlinkRels = [];
+    const numberingDefinitions = [];
     let hyperlinkId = 10;
+    let numberingId = 1;
 
     function inlineWordXml(text, base = {}) {
       return parseInlineTokens(text).map(token => {
@@ -556,7 +559,8 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
         opts.keepNext ? '<w:keepNext/>' : '',
         opts.indent ? `<w:ind w:left="${opts.indent}"/>` : '',
         opts.borderLeft ? `<w:pBdr><w:left w:val="single" w:sz="${opts.borderLeft.size || 18}" w:space="8" w:color="${opts.borderLeft.color || '64748B'}"/></w:pBdr>` : '',
-        opts.shading ? `<w:shd w:val="clear" w:color="auto" w:fill="${opts.shading}"/>` : ''
+        opts.shading ? `<w:shd w:val="clear" w:color="auto" w:fill="${opts.shading}"/>` : '',
+        opts.numId ? `<w:numPr><w:ilvl w:val="0"/><w:numId w:val="${opts.numId}"/></w:numPr>` : ''
       ].join('');
       const body = opts.raw ? content : inlineWordXml(content, opts.run || {});
       return `<w:p>${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${body}</w:p>`;
@@ -597,9 +601,9 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
         } else if (block.type === 'quote') {
           parts.push(paragraph(block.text, { after: 160, indent: 360, shading: 'F8FAFC', borderLeft: { color: '94A3B8', size: 16 } }));
         } else if (block.type === 'list') {
-          const prefix = block.ordered ? `${block.marker || '1'}. ` : '• ';
-          parts.push(paragraph('', { raw: true, after: 70, indent: 360 })
-            .replace('</w:p>', `${wordRun(prefix, { bold: false })}${inlineWordXml(block.text)}</w:p>`));
+          const id = numberingId++;
+          numberingDefinitions.push({ id, ordered: block.ordered, start: Number(block.marker || 1) || 1 });
+          parts.push(paragraph(inlineWordXml(block.text), { raw: true, after: 70, numId: id }));
         } else if (block.type === 'rule') {
           parts.push('<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="4" w:space="6" w:color="D1D5DB"/></w:pBdr><w:spacing w:before="100" w:after="100"/></w:pPr></w:p>');
         } else if (block.type === 'code') {
@@ -620,14 +624,6 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
     body.push(paragraph('CHATGPT CONVERSATION EXPORT', { style: 'Kicker', keepNext: true }));
     body.push(paragraph(title, { style: 'Title', keepNext: true }));
 
-    const scope = turns.length === 1 ? 'Single question and answer' : `Complete conversation · ${turns.length} Q&A turns`;
-    body.push(wordTable([
-      ['Scope', scope],
-      ['Source', data.url || ''],
-      ['Exported', formatDate(new Date())]
-    ], { header: false }));
-    body.push(paragraph(' ', { after: 120 }));
-
     turns.forEach((turn, idx) => {
       const n = Number.isFinite(turn.index) ? turn.index + 1 : idx + 1;
       body.push(paragraph(`QUESTION ${String(n).padStart(2, '0')}`, { style: 'SectionLabel', keepNext: true }));
@@ -647,7 +643,7 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
     const sectPr = `<w:sectPr>
       <w:headerReference w:type="default" r:id="rId2"/>
       <w:footerReference w:type="default" r:id="rId3"/>
-      <w:pgSz w:w="11906" w:h="16838"/>
+      <w:pgSz w:w="${page.width}" w:h="${page.height}"/>
       <w:pgMar w:top="1077" w:right="964" w:bottom="1077" w:left="964" w:header="425" w:footer="425" w:gutter="0"/>
     </w:sectPr>`;
 
@@ -681,6 +677,7 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
   <Default Extension="xml" ContentType="application/xml"/>
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
   <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
   <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
   <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
@@ -699,11 +696,15 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
   <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>
   <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>
+  <Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
   ${hyperlinkRels.join('\n  ')}
 </Relationships>`;
 
     const settingsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:updateFields w:val="true"/><w:defaultTabStop w:val="720"/></w:settings>`;
+
+    const numberingXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${numberingDefinitions.map(def => `<w:abstractNum w:abstractNumId="${def.id}"><w:multiLevelType w:val="singleLevel"/><w:lvl w:ilvl="0"><w:start w:val="${def.start}"/><w:numFmt w:val="${def.ordered ? 'decimal' : 'bullet'}"/><w:lvlText w:val="${def.ordered ? '%1.' : '•'}"/><w:lvlJc w:val="left"/><w:pPr><w:tabs><w:tab w:val="num" w:pos="720"/></w:tabs><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum><w:num w:numId="${def.id}"><w:abstractNumId w:val="${def.id}"/><w:lvlOverride w:ilvl="0"><w:startOverride w:val="${def.start}"/></w:lvlOverride></w:num>`).join('')}</w:numbering>`;
 
     const now = new Date().toISOString();
     const coreXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -722,6 +723,7 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
       { name: 'docProps/core.xml', data: coreXml },
       { name: 'word/document.xml', data: documentXml },
       { name: 'word/styles.xml', data: stylesXml },
+      { name: 'word/numbering.xml', data: numberingXml },
       { name: 'word/header1.xml', data: headerXml },
       { name: 'word/footer1.xml', data: footerXml },
       { name: 'word/settings.xml', data: settingsXml },
@@ -736,8 +738,8 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
     downloadBlob(blob, exportFilename(data, turns, 'md'));
   }
 
-  function exportDocx(data, turns) {
-    downloadBlob(createDocxBlob(data, turns), exportFilename(data, turns, 'docx'));
+  function exportDocx(data, turns, options = {}) {
+    downloadBlob(createDocxBlob(data, turns, options), exportFilename(data, turns, 'docx'));
   }
 
   globalThis.ChatGPTExporter = Object.freeze({
