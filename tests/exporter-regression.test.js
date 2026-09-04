@@ -55,3 +55,48 @@ test('DOCX contains native numbering, Unicode, and A4 geometry', async () => {
   assert.match(raw, /w:pgSz w:w="11906" w:h="16838"/);
   assert.match(raw, /සිංහල English தமிழ் 한국어 😀/);
 });
+
+const fs = require('node:fs');
+
+test('content script keeps both export controls self-healing and independent of ChatGPT button state', () => {
+  const source = fs.readFileSync(require.resolve('../content.js'), 'utf8');
+  assert.match(source, /createOwnedButton/);
+  assert.match(source, /Export this question and answer/);
+  assert.match(source, /Export entire conversation/);
+  assert.match(source, /insertBefore\(button, unit\)/);
+  assert.doesNotMatch(source, /cgxExportDecorated === '1'/);
+  assert.doesNotMatch(source, /cloneNode\(true\).*Share/s);
+});
+
+test('content extractor preserves meaningful rendered SVG diagrams', () => {
+  const source = fs.readFileSync(require.resolve('../content.js'), 'utf8');
+  assert.match(source, /XMLSerializer/);
+  assert.match(source, /data:image\/svg\+xml;base64/);
+  assert.match(source, /shapeCount >= 8/);
+});
+
+test('PDF renderer accepts data-image diagrams and uses diagram-aware code formatting', () => {
+  const diagram = [{
+    id: 'turn-diagram',
+    index: 0,
+    question: { role: 'user', text: 'Show architecture', markdown: 'Show architecture' },
+    answers: [{
+      role: 'assistant',
+      text: 'Diagram',
+      markdown: '![Diagram](data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=)\n\n\`\`\`text\nA ──→ B\n     │\n     ▼\n     C\n\`\`\`'
+    }]
+  }];
+  const html = exporter.buildPrintHtml(data, diagram);
+  assert.match(html, /data:image\/svg\+xml;base64/);
+  assert.match(html, /diagram-wrap/);
+  assert.match(html, /diagram-code/);
+});
+
+test('professional PDF typography uses restrained document palette and standard point sizes', () => {
+  const html = exporter.buildPrintHtml(data, turns);
+  assert.match(html, /font-size: 10\.5pt/);
+  assert.match(html, /h1 \{ font-size: 23pt/);
+  assert.match(html, /#183B56/);
+  assert.match(html, /#F7F9FC/);
+  assert.match(html, /Cascadia Mono/);
+});
