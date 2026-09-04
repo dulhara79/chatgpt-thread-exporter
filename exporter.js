@@ -236,7 +236,7 @@
 
     let value = source
       .replace(/`([^`]+)`/g, (_, code) => stash('<code class="inline-code">' + escapeHtml(code) + '</code>'))
-      .replace(/!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g, (_, alt, src) => stash('<figure class="media"><img src="' + escapeHtml(src) + '" alt="' + escapeHtml(alt || 'Image') + '" referrerpolicy="no-referrer"></figure>'))
+      .replace(/!\[([^\]]*)\]\((https?:\/\/[^)]+|data:image\/[^)]+)\)/g, (_, alt, src) => stash('<figure class="media"><img src="' + escapeHtml(src) + '" alt="' + escapeHtml(alt || 'Image') + '" referrerpolicy="no-referrer"></figure>'))
       .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, (_, label, href) => stash('<a href="' + escapeHtml(href) + '">' + escapeHtml(label) + '</a>'))
       .replace(/\$\$([^$]+)\$\$/g, (_, tex) => stash('<div class="math-display">' + escapeHtml(tex.trim()) + '</div>'))
       .replace(/\$([^$\n]+)\$/g, (_, tex) => stash('<span class="math-inline">' + escapeHtml(tex.trim()) + '</span>'));
@@ -276,7 +276,10 @@
       } else if (block.type === 'rule') {
         html.push('<hr>');
       } else if (block.type === 'code') {
-        html.push(`<div class="code-wrap">${block.lang ? `<div class="code-lang">${escapeHtml(block.lang)}</div>` : ''}<pre><code>${escapeHtml(block.text)}</code></pre></div>`);
+        const diagram = /^(?:mermaid|diagram|flowchart|graphviz|dot|plantuml|ascii|text)$/i.test(block.lang || '') || /[┌┐└┘├┤┬┴┼│─▼▲►◄→←]/.test(block.text || '');
+        const cls = diagram ? 'code-wrap diagram-wrap' : 'code-wrap';
+        const preCls = diagram ? ' class="diagram-code"' : '';
+        html.push(`<div class="${cls}">${block.lang ? `<div class="code-lang">${escapeHtml(block.lang)}</div>` : ''}<pre${preCls}><code>${escapeHtml(block.text)}</code></pre></div>`);
       } else if (block.type === 'list') {
         const wanted = block.ordered ? 'ol' : 'ul';
         if (listType !== wanted) {
@@ -335,63 +338,61 @@
 <style>
 @page {
   size: ${pageSize};
-  margin: 19mm 17mm 19mm 17mm;
+  margin: 18mm 18mm 18mm 18mm;
   @bottom-left { content: "${APP_NAME}"; font: 8.5pt Arial, sans-serif; color: #6b7280; }
   @bottom-right { content: "Page " counter(page) " of " counter(pages); font: 8.5pt Arial, sans-serif; color: #6b7280; }
 }
 * { box-sizing: border-box; }
 html, body { padding: 0; margin: 0; }
 body {
-  color: #111827;
+  color: #243142;
   background: #fff;
-  font-family: "Aptos", "Segoe UI", "Nirmala UI", "Noto Sans Sinhala", "Noto Sans Tamil", "Malgun Gothic", "Segoe UI Emoji", "Apple Color Emoji", Arial, sans-serif;
+  font-family: "Aptos", "Segoe UI", "Nirmala UI", "Noto Sans Sinhala", "Noto Sans Tamil", "Malgun Gothic", Arial, sans-serif;
   font-size: 10.5pt;
-  line-height: 1.55;
+  line-height: 1.52;
   -webkit-print-color-adjust: exact;
   print-color-adjust: exact;
 }
-.document { max-width: 178mm; margin: 0 auto; }
-.document-header { margin-bottom: 11mm; padding-bottom: 5mm; border-bottom: 1.2pt solid #17365D; }
-.kicker { font-size: 8.5pt; font-weight: 700; letter-spacing: .12em; color: #4b5563; margin-bottom: 3mm; }
-h1 { font-size: 22pt; line-height: 1.18; letter-spacing: -.02em; margin: 0; font-weight: 700; color: #17365D; }
-.meta-grid { width: 100%; border-collapse: collapse; font-size: 8.8pt; color: #4b5563; }
-.meta-grid th { text-align: left; width: 23mm; padding: 1.1mm 3mm 1.1mm 0; color: #111827; font-weight: 650; vertical-align: top; }
-.meta-grid td { padding: 1.1mm 0; overflow-wrap: anywhere; vertical-align: top; }
-.qa-section { padding: 0 0 8mm; margin: 0 0 9mm; border-bottom: .6pt solid #d1d5db; break-inside: auto; }
+.document { width: 100%; max-width: 174mm; margin: 0 auto; }
+.document-header { margin-bottom: 9mm; padding-bottom: 4.5mm; border-bottom: 1.1pt solid #1E3A5F; }
+.kicker { font-size: 8pt; font-weight: 700; letter-spacing: .11em; color: #65758B; margin-bottom: 2.5mm; }
+h1 { font-size: 23pt; line-height: 1.16; letter-spacing: -.015em; margin: 0; font-weight: 700; color: #183B56; }
+.qa-section { padding: 0 0 7mm; margin: 0 0 8mm; border-bottom: .55pt solid #D8E1EB; break-inside: auto; }
 .qa-section:last-child { border-bottom: 0; margin-bottom: 0; }
-.section-label, .answer-header { font-size: 8.5pt; font-weight: 750; letter-spacing: .10em; color: #374151; margin: 0 0 3mm; }
-.answer-header { margin-top: 7mm; color: #17365D; }
-.question-content { background: #F5F8FC; border-left: 3pt solid #17365D; padding: 4mm 4.5mm; margin-bottom: 5mm; }
+.section-label, .answer-header { font-size: 8.2pt; font-weight: 700; letter-spacing: .09em; color: #5A6B7E; margin: 0 0 2.5mm; text-transform: uppercase; }
+.answer-header { margin-top: 6mm; color: #1E3A5F; }
+.question-content { background: #F7F9FC; border-left: 2.5pt solid #2E5B88; padding: 3.5mm 4.2mm; margin-bottom: 4.5mm; }
 .answer-content { padding-left: .5mm; }
-h3 { font-size: 14pt; margin: 6mm 0 2.5mm; line-height: 1.25; color: #111827; }
-h4 { font-size: 12pt; margin: 5mm 0 2mm; line-height: 1.3; color: #111827; }
-h5, h6 { font-size: 10.5pt; margin: 4mm 0 1.5mm; color: #111827; }
-p { margin: 0 0 3.2mm; orphans: 3; widows: 3; }
-ul, ol { margin: 1.5mm 0 4mm 6mm; padding-left: 5mm; }
+h3 { font-size: 14pt; margin: 5.5mm 0 2.2mm; line-height: 1.24; color: #183B56; border-bottom: .45pt solid #E2E8F0; padding-bottom: 1.4mm; }
+h4 { font-size: 12pt; margin: 4.5mm 0 1.8mm; line-height: 1.28; color: #264C70; }
+h5, h6 { font-size: 10.8pt; margin: 4mm 0 1.4mm; color: #334E68; }
+p { margin: 0 0 3mm; orphans: 3; widows: 3; }
+ul, ol { margin: 1.4mm 0 3.5mm 5.5mm; padding-left: 5mm; }
 li { margin: 1mm 0; }
-blockquote { margin: 3.5mm 0; padding: 2.5mm 4mm; border-left: 2.5pt solid #9ca3af; background: #f9fafb; color: #374151; }
+blockquote { margin: 3.5mm 0; padding: 2.8mm 4mm; border-left: 2.4pt solid #6B87A3; background: #F8FAFC; color: #405268; }
 hr { border: 0; border-top: .6pt solid #d1d5db; margin: 5mm 0; }
-.inline-code { font-family: Consolas, "SFMono-Regular", monospace; font-size: 9.2pt; background: #f3f4f6; padding: .3mm 1mm; border-radius: 1mm; }
+.inline-code { font-family: "Cascadia Mono", Consolas, "Courier New", monospace; font-size: 9pt; background: #F1F5F9; padding: .25mm .9mm; border-radius: .8mm; }
 .code-wrap { margin: 4mm 0; break-inside: avoid; }
-.code-lang { font: 700 7.5pt/1.2 Consolas, monospace; letter-spacing: .08em; text-transform: uppercase; color: #4b5563; margin: 0 0 1.5mm; }
-pre { margin: 0; padding: 4mm; white-space: pre-wrap; overflow-wrap: anywhere; background: #f3f4f6; border: .5pt solid #d1d5db; border-radius: 2mm; font: 8.7pt/1.48 Consolas, "Courier New", monospace; }
-a { color: #1d4ed8; text-decoration: underline; text-underline-offset: 1px; }
+.code-lang { font: 700 7.4pt/1.2 "Cascadia Mono", Consolas, monospace; letter-spacing: .07em; text-transform: uppercase; color: #64748B; margin: 0 0 1.3mm; }
+pre { margin: 0; padding: 3.6mm; white-space: pre-wrap; overflow-wrap: anywhere; background: #F4F6F8; border: .5pt solid #D8E1EB; border-radius: 1.5mm; font: 8.6pt/1.45 "Cascadia Mono", Consolas, "Courier New", monospace; color: #243142; }
+.diagram-wrap { background: #FBFCFE; border: .55pt solid #D8E1EB; border-radius: 1.5mm; padding: 2mm; }
+.diagram-wrap .code-lang { margin: 0 1mm 1.5mm; }
+pre.diagram-code { background: #FFFFFF; border: 0; padding: 3mm 2.5mm; white-space: pre; overflow: hidden; overflow-wrap: normal; word-break: normal; font-size: 7.8pt; line-height: 1.36; text-align: left; }
+a { color: #1E5A8A; text-decoration: underline; text-underline-offset: 1px; }
 .table-wrap { margin: 4mm 0; overflow: hidden; }
 table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 9pt; }
 th, td { border: .55pt solid #cbd5e1; padding: 2.1mm 2.4mm; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
-th { background: #EEF3F8; font-weight: 700; color: #17365D; }
+th { background: #EEF3F8; font-weight: 700; color: #183B56; }
 .media { margin: 4mm 0; text-align: center; break-inside: avoid; }
 .media img { display: block; max-width: 100%; max-height: 235mm; width: auto; height: auto; object-fit: contain; margin: 0 auto; }
 .math-inline { font-family: "Cambria Math", "Times New Roman", serif; }
-.math-display { margin: 4mm 0; padding: 3mm; text-align: center; white-space: pre-wrap; overflow-wrap: anywhere; font-family: "Cambria Math", "Times New Roman", serif; background: #FAFBFC; border: .5pt solid #D9E2EC; }
-.document-end { margin-top: 10mm; padding-top: 3mm; border-top: .6pt solid #d1d5db; font-size: 8pt; color: #6b7280; }
-@media print { .document-end { display: none; } }
+.math-display { margin: 4mm 0; padding: 3mm 4mm; text-align: center; white-space: pre-wrap; overflow-wrap: anywhere; font-family: "Cambria Math", "Times New Roman", serif; font-size: 10.8pt; background: #FBFCFD; border: .5pt solid #D8E1EB; }
 </style>
 </head>
 <body>
 <main class="document">
   <header class="document-header">
-    <div class="kicker">CHATGPT CONVERSATION EXPORT</div>
+    <div class="kicker">CONVERSATION DOCUMENT</div>
     <h1>${escapeHtml(title)}</h1>
 
   </header>
@@ -500,7 +501,7 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
       opts.underline ? '<w:u w:val="single"/>' : '',
       opts.color ? `<w:color w:val="${opts.color}"/>` : '',
       opts.size ? `<w:sz w:val="${opts.size}"/><w:szCs w:val="${opts.size}"/>` : '',
-      opts.code ? '<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:eastAsia="Consolas"/><w:shd w:val="clear" w:color="auto" w:fill="F3F4F6"/>' : ''
+      opts.code ? '<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:eastAsia="Consolas"/><w:shd w:val="clear" w:color="auto" w:fill="F4F6F8"/>' : ''
     ].join('');
     const parts = String(text).split('\n');
     const content = parts.map((part, index) => `${index ? '<w:br/>' : ''}<w:t${preserve}>${xmlEscape(part)}</w:t>`).join('');
@@ -642,7 +643,7 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
       const grid = Array(cols).fill(`<w:gridCol w:w="${colWidth}"/>`).join('');
       const tableRows = rows.map((row, rIdx) => {
         const cells = [...row, ...Array(Math.max(0, cols - row.length)).fill('')];
-        return `<w:tr>${cells.map(cell => `<w:tc><w:tcPr><w:tcW w:w="${colWidth}" w:type="dxa"/>${rIdx === 0 && opts.header !== false ? '<w:shd w:val="clear" w:color="auto" w:fill="F1F5F9"/>' : ''}<w:tcMar><w:top w:w="80" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tcMar></w:tcPr>${paragraph(String(cell), { after: 0, run: rIdx === 0 && opts.header !== false ? { bold: true } : {} })}</w:tc>`).join('')}</w:tr>`;
+        return `<w:tr>${cells.map(cell => `<w:tc><w:tcPr><w:tcW w:w="${colWidth}" w:type="dxa"/>${rIdx === 0 && opts.header !== false ? '<w:shd w:val="clear" w:color="auto" w:fill="EEF3F8"/>' : ''}<w:tcMar><w:top w:w="80" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tcMar></w:tcPr>${paragraph(String(cell), { after: 0, run: rIdx === 0 && opts.header !== false ? { bold: true } : {} })}</w:tc>`).join('')}</w:tr>`;
       }).join('');
       return `<w:tbl><w:tblPr><w:tblW w:w="${totalWidth}" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="4" w:color="CBD5E1"/><w:left w:val="single" w:sz="4" w:color="CBD5E1"/><w:bottom w:val="single" w:sz="4" w:color="CBD5E1"/><w:right w:val="single" w:sz="4" w:color="CBD5E1"/><w:insideH w:val="single" w:sz="4" w:color="CBD5E1"/><w:insideV w:val="single" w:sz="4" w:color="CBD5E1"/></w:tblBorders></w:tblPr><w:tblGrid>${grid}</w:tblGrid>${tableRows}</w:tbl>`;
     }
@@ -675,11 +676,11 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
     }
 
     function boxedContentXml(contentXml) {
-      return `<w:tbl><w:tblPr><w:tblW w:w="9360" w:type="dxa"/><w:tblBorders><w:left w:val="single" w:sz="20" w:color="64748B"/><w:top w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="9360"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="9360" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="F8FAFC"/><w:tcMar><w:top w:w="150" w:type="dxa"/><w:left w:w="180" w:type="dxa"/><w:bottom w:w="120" w:type="dxa"/><w:right w:w="180" w:type="dxa"/></w:tcMar></w:tcPr>${contentXml || paragraph(' ')}</w:tc></w:tr></w:tbl>`;
+      return `<w:tbl><w:tblPr><w:tblW w:w="9360" w:type="dxa"/><w:tblBorders><w:left w:val="single" w:sz="20" w:color="2E5B88"/><w:top w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="9360"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="9360" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="F7F9FC"/><w:tcMar><w:top w:w="150" w:type="dxa"/><w:left w:w="180" w:type="dxa"/><w:bottom w:w="120" w:type="dxa"/><w:right w:w="180" w:type="dxa"/></w:tcMar></w:tcPr>${contentXml || paragraph(' ')}</w:tc></w:tr></w:tbl>`;
     }
 
     const body = [];
-    body.push(paragraph('CHATGPT CONVERSATION EXPORT', { style: 'Kicker', keepNext: true }));
+    body.push(paragraph('CONVERSATION DOCUMENT', { style: 'Kicker', keepNext: true }));
     body.push(paragraph(title, { style: 'Title', keepNext: true }));
 
     turns.forEach((turn, idx) => {
@@ -712,15 +713,15 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
     const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Aptos" w:hAnsi="Aptos" w:eastAsia="Malgun Gothic" w:cs="Nirmala UI"/><w:sz w:val="21"/><w:szCs w:val="21"/><w:lang w:val="en-US"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="140" w:line="300" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>
-  <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/><w:rPr><w:rFonts w:ascii="Aptos" w:hAnsi="Aptos" w:eastAsia="Malgun Gothic" w:cs="Nirmala UI"/><w:sz w:val="21"/><w:szCs w:val="21"/><w:color w:val="111827"/></w:rPr></w:style>
-  <w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="40" w:after="260"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="42"/><w:szCs w:val="42"/><w:color w:val="111827"/></w:rPr></w:style>
-  <w:style w:type="paragraph" w:styleId="Kicker"><w:name w:val="Kicker"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="90"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="17"/><w:szCs w:val="17"/><w:color w:val="4B5563"/><w:spacing w:val="20"/></w:rPr></w:style>
-  <w:style w:type="paragraph" w:styleId="SectionLabel"><w:name w:val="Section Label"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="160" w:after="100"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="17"/><w:szCs w:val="17"/><w:color w:val="374151"/><w:spacing w:val="16"/></w:rPr></w:style>
-  <w:style w:type="paragraph" w:styleId="AnswerLabel"><w:name w:val="Answer Label"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="220" w:after="100"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="17"/><w:szCs w:val="17"/><w:color w:val="065F46"/><w:spacing w:val="16"/></w:rPr></w:style>
-  <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="Heading 2"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="220" w:after="100"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="28"/><w:szCs w:val="28"/><w:color w:val="111827"/></w:rPr></w:style>
-  <w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="Heading 3"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="180" w:after="90"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="111827"/></w:rPr></w:style>
-  <w:style w:type="paragraph" w:styleId="Heading4"><w:name w:val="Heading 4"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="150" w:after="80"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="22"/><w:szCs w:val="22"/><w:color w:val="111827"/></w:rPr></w:style>
-  <w:style w:type="paragraph" w:styleId="CodeLabel"><w:name w:val="Code Label"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="100" w:after="50"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="15"/><w:szCs w:val="15"/><w:color w:val="4B5563"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/><w:rPr><w:rFonts w:ascii="Aptos" w:hAnsi="Aptos" w:eastAsia="Malgun Gothic" w:cs="Nirmala UI"/><w:sz w:val="21"/><w:szCs w:val="21"/><w:color w:val="243142"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="40" w:after="260"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="42"/><w:szCs w:val="42"/><w:color w:val="183B56"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Kicker"><w:name w:val="Kicker"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="90"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="17"/><w:szCs w:val="17"/><w:color w:val="64748B"/><w:spacing w:val="20"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="SectionLabel"><w:name w:val="Section Label"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="160" w:after="100"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="17"/><w:szCs w:val="17"/><w:color w:val="5A6B7E"/><w:spacing w:val="16"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="AnswerLabel"><w:name w:val="Answer Label"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="220" w:after="100"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="17"/><w:szCs w:val="17"/><w:color w:val="1E3A5F"/><w:spacing w:val="16"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="Heading 2"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="220" w:after="100"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="28"/><w:szCs w:val="28"/><w:color w:val="243142"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="Heading 3"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="180" w:after="90"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="243142"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading4"><w:name w:val="Heading 4"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="150" w:after="80"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="22"/><w:szCs w:val="22"/><w:color w:val="243142"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="CodeLabel"><w:name w:val="Code Label"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="100" w:after="50"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="15"/><w:szCs w:val="15"/><w:color w:val="64748B"/></w:rPr></w:style>
 </w:styles>`;
 
     const headerXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
