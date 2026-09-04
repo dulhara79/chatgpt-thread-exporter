@@ -341,6 +341,20 @@
     return best;
   }
 
+  function findHeaderActionFallback() {
+    const candidates = [];
+    for (const element of document.querySelectorAll('header, nav, [role="banner"], main > div')) {
+      if (!(element instanceof Element)) continue;
+      const rect = element.getBoundingClientRect();
+      if (rect.top > 140 || rect.bottom > 240 || rect.width < 240) continue;
+      const buttons = Array.from(element.querySelectorAll('button')).filter(button => visible(button) && !button.closest('article') && !button.closest('[data-cgx-ui]'));
+      if (!buttons.length || buttons.length > 12) continue;
+      const right = Math.max(...buttons.map(button => button.getBoundingClientRect().right));
+      candidates.push({ element, template: buttons[buttons.length - 1], score: right + (rect.top < 90 ? 300 : 0) });
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates[0] || null;
+  }
   function createThreadExportButton(shareButton) {
     let button;
     if (shareButton) {
@@ -369,11 +383,20 @@
   }
 
   function decorateThreadHeader() {
-    if (document.getElementById(THREAD_BUTTON_ID)) return;
+    const existing = document.getElementById(THREAD_BUTTON_ID);
     const shareButton = findShareButton();
-    if (!shareButton?.parentElement) return;
-    const button = createThreadExportButton(shareButton);
-    shareButton.insertAdjacentElement('beforebegin', button);
+    if (shareButton?.parentElement) {
+      if (existing) {
+        if (existing.parentElement !== shareButton.parentElement || existing.nextElementSibling !== shareButton) shareButton.insertAdjacentElement('beforebegin', existing);
+        return;
+      }
+      shareButton.insertAdjacentElement('beforebegin', createThreadExportButton(shareButton));
+      return;
+    }
+    if (existing) return;
+    const fallback = findHeaderActionFallback();
+    if (!fallback) return;
+    fallback.element.appendChild(createThreadExportButton(fallback.template));
   }
 
   function closeMenu() {
