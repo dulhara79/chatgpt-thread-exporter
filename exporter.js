@@ -742,6 +742,9 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
 
   globalThis.ChatGPTExporter = Object.freeze({
     normalizeText,
+    normalizePageSize,
+    shouldIncludeImage,
+    PAGE_SIZES,
     safeFilename,
     exportFilename,
     createMarkdown,
