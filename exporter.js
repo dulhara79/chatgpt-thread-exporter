@@ -172,7 +172,7 @@
 
       const ordered = raw.match(/^\s*(\d+)\.\s+(.*)$/);
       if (ordered) {
-        blocks.push({ type: 'list', ordered: true, marker: ordered[1], text: ordered[2] });
+        blocks.push({ type: 'list', ordered: true, marker: Number(ordered[1]), text: ordered[2] });
         i += 1;
         continue;
       }
@@ -235,8 +235,11 @@
     };
 
     let value = source
-      .replace(/`([^`]+)`/g, (_, code) => stash(`<code class="inline-code">${escapeHtml(code)}</code>`))
-      .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, (_, label, href) => stash(`<a href="${escapeHtml(href)}">${escapeHtml(label)}</a>`));
+      .replace(/`([^`]+)`/g, (_, code) => stash('<code class="inline-code">' + escapeHtml(code) + '</code>'))
+      .replace(/!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g, (_, alt, src) => stash('<figure class="media"><img src="' + escapeHtml(src) + '" alt="' + escapeHtml(alt || 'Image') + '" referrerpolicy="no-referrer"></figure>'))
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, (_, label, href) => stash('<a href="' + escapeHtml(href) + '">' + escapeHtml(label) + '</a>'))
+      .replace(/\$\$([^$]+)\$\$/g, (_, tex) => stash('<div class="math-display">' + escapeHtml(tex.trim()) + '</div>'))
+      .replace(/\$([^$\n]+)\$/g, (_, tex) => stash('<span class="math-inline">' + escapeHtml(tex.trim()) + '</span>'));
 
     value = escapeHtml(value)
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
@@ -278,10 +281,10 @@
         const wanted = block.ordered ? 'ol' : 'ul';
         if (listType !== wanted) {
           closeList();
-          html.push(wanted === 'ol' ? '<ol>' : '<ul>');
+          html.push(block.ordered ? '<ol start="' + (block.marker || 1) + '">' : '<ul>');
           listType = wanted;
         }
-        html.push(`<li>${inlineToHtml(block.text)}</li>`);
+        html.push(block.ordered ? '<li value="' + (block.marker || 1) + '">' + inlineToHtml(block.text) + '</li>' : '<li>' + inlineToHtml(block.text) + '</li>');
       } else if (block.type === 'table') {
         const [head, ...rows] = block.rows;
         html.push('<div class="table-wrap"><table><thead><tr>');
