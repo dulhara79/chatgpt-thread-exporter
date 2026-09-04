@@ -70,15 +70,33 @@
         return href && !href.startsWith('javascript:') ? `[${label}](${href})` : label;
       }
       if (tag === 'img') {
-        const alt = el.getAttribute('alt') || 'Image';
-        const src = el.getAttribute('src') || '';
-        return src ? `![${alt}](${src})` : `[${alt}]`;
+        const meta = {
+          src: el.currentSrc || el.getAttribute('src') || '',
+          alt: el.getAttribute('alt') || el.getAttribute('aria-label') || 'Image',
+          width: el.naturalWidth || Number(el.getAttribute('width')) || el.getBoundingClientRect().width || 0,
+          height: el.naturalHeight || Number(el.getAttribute('height')) || el.getBoundingClientRect().height || 0,
+          className: String(el.className || ''),
+          role: el.getAttribute('role') || ''
+        };
+        if (!exporter.shouldIncludeImage(meta)) return '';
+        return meta.src ? '![' + meta.alt + '](' + meta.src + ')' : '[' + meta.alt + ']';
+      }
+      const mathClass = String(el.className || '').toLowerCase();
+      if (tag === 'math' || tag === 'mjx-container' || mathClass.includes('katex') || mathClass.includes('mathjax')) {
+        const annotation = el.querySelector('annotation[encoding="application/x-tex"], annotation[encoding="application/tex"]');
+        const tex = normalizeText(annotation?.textContent || el.getAttribute('data-tex') || el.getAttribute('data-latex') || el.getAttribute('aria-label') || el.textContent || '');
+        if (!tex) return '';
+        const dollar = String.fromCharCode(36);
+        const display = mathClass.includes('katex-display') || el.getAttribute('display') === 'block';
+        return display ? '\n\n' + dollar + dollar + tex + dollar + dollar + '\n\n' : dollar + tex + dollar;
       }
       if (tag === 'li') {
         const parent = el.parentElement?.tagName.toLowerCase();
         if (parent === 'ol') {
           const siblings = Array.from(el.parentElement.children).filter(c => c.tagName?.toLowerCase() === 'li');
-          const index = siblings.indexOf(el) + 1;
+          const start = Number(el.parentElement.getAttribute('start') || 1) || 1;
+          const explicit = el.getAttribute('value');
+          const index = explicit !== null ? Number(explicit) : start + siblings.indexOf(el);
           return `${index}. ${normalizeText(child())}\n`;
         }
         return `- ${normalizeText(child())}\n`;
@@ -355,7 +373,7 @@
     const shareButton = findShareButton();
     if (!shareButton?.parentElement) return;
     const button = createThreadExportButton(shareButton);
-    shareButton.insertAdjacentElement('afterend', button);
+    shareButton.insertAdjacentElement('beforebegin', button);
   }
 
   function closeMenu() {
