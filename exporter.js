@@ -4,6 +4,31 @@
   const APP_NAME = 'ChatGPT Thread Exporter';
   const MIME_DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
+  const PAGE_SIZES = Object.freeze({
+    A4: { css: 'A4', width: 11906, height: 16838 },
+    Letter: { css: 'Letter', width: 12240, height: 15840 },
+    Legal: { css: 'Legal', width: 12240, height: 20160 }
+  });
+
+  function normalizePageSize(value) {
+    const key = String(value || 'A4').toLowerCase();
+    if (key === 'letter') return 'Letter';
+    if (key === 'legal') return 'Legal';
+    return 'A4';
+  }
+
+  function shouldIncludeImage(meta = {}) {
+    const src = String(meta.src || '').trim();
+    if (!src || /^javascript:/i.test(src)) return false;
+    const haystack = [src, meta.alt || '', meta.className || '', meta.role || ''].join(' ').toLowerCase();
+    if (/google\.com\/s2\/favicons|favicon|apple-touch-icon|avatar|profile[-_ ]?image|toolbar[-_ ]?icon|tracking[-_ ]?pixel/.test(haystack)) return false;
+    const width = Number(meta.width || 0);
+    const height = Number(meta.height || 0);
+    if (width > 0 && height > 0 && width <= 64 && height <= 64) return false;
+    if (width > 0 && height > 0 && width * height < 4096) return false;
+    return true;
+  }
+
   function normalizeText(text) {
     return (text || '')
       .replace(/\u00a0/g, ' ')
@@ -75,30 +100,17 @@
 
   function createMarkdown(data, turns) {
     const title = documentTitle(data, turns);
-    const lines = [
-      `# ${title}`,
-      '',
-      '**Document type:** ChatGPT Conversation Export  ',
-      `**Source:** ${data.url || ''}  `,
-      `**Exported:** ${formatDate(new Date())}  `,
-      `**Scope:** ${turns.length === 1 ? 'Single question and answer' : `Complete conversation (${turns.length} Q&A turns)`}`,
-      '',
-      '---',
-      ''
-    ];
-
+    const lines = ['# ' + title, ''];
     turns.forEach((turn, idx) => {
       const n = Number.isFinite(turn.index) ? turn.index + 1 : idx + 1;
-      lines.push(`## Question ${String(n).padStart(2, '0')}`, '', turn.question.markdown || turn.question.text || '', '');
+      lines.push('## Question ' + n, '', turn.question.markdown || turn.question.text || '', '');
       const answers = (turn.answers || []).filter(a => a.text || a.markdown);
       answers.forEach((answer, answerIndex) => {
-        lines.push(answers.length > 1 ? `## Answer ${String(answerIndex + 1).padStart(2, '0')}` : '## Answer', '', answer.markdown || answer.text || '', '');
+        lines.push(answers.length > 1 ? '## Answer ' + (answerIndex + 1) : '## Answer', '', answer.markdown || answer.text || '', '');
       });
       if (idx < turns.length - 1) lines.push('---', '');
     });
-
-    lines.push('---', '', `*Generated locally by ${APP_NAME}.*`, '');
-    return lines.join('\n').trimEnd() + '\n';
+    return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
   }
 
   // ---------------- Shared Markdown parser ----------------
@@ -160,7 +172,7 @@
 
       const ordered = raw.match(/^\s*(\d+)\.\s+(.*)$/);
       if (ordered) {
-        blocks.push({ type: 'list', ordered: true, marker: ordered[1], text: ordered[2] });
+        blocks.push({ type: 'list', ordered: true, marker: Number(ordered[1]), text: ordered[2] });
         i += 1;
         continue;
       }
@@ -223,8 +235,11 @@
     };
 
     let value = source
-      .replace(/`([^`]+)`/g, (_, code) => stash(`<code class="inline-code">${escapeHtml(code)}</code>`))
-      .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, (_, label, href) => stash(`<a href="${escapeHtml(href)}">${escapeHtml(label)}</a>`));
+      .replace(/`([^`]+)`/g, (_, code) => stash('<code class="inline-code">' + escapeHtml(code) + '</code>'))
+      .replace(/!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g, (_, alt, src) => stash('<figure class="media"><img src="' + escapeHtml(src) + '" alt="' + escapeHtml(alt || 'Image') + '" referrerpolicy="no-referrer"></figure>'))
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, (_, label, href) => stash('<a href="' + escapeHtml(href) + '">' + escapeHtml(label) + '</a>'))
+      .replace(/\$\$([^$]+)\$\$/g, (_, tex) => stash('<div class="math-display">' + escapeHtml(tex.trim()) + '</div>'))
+      .replace(/\$([^$\n]+)\$/g, (_, tex) => stash('<span class="math-inline">' + escapeHtml(tex.trim()) + '</span>'));
 
     value = escapeHtml(value)
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
@@ -266,10 +281,10 @@
         const wanted = block.ordered ? 'ol' : 'ul';
         if (listType !== wanted) {
           closeList();
-          html.push(wanted === 'ol' ? '<ol>' : '<ul>');
+          html.push(block.ordered ? '<ol start="' + (block.marker || 1) + '">' : '<ul>');
           listType = wanted;
         }
-        html.push(`<li>${inlineToHtml(block.text)}</li>`);
+        html.push(block.ordered ? '<li value="' + (block.marker || 1) + '">' + inlineToHtml(block.text) + '</li>' : '<li>' + inlineToHtml(block.text) + '</li>');
       } else if (block.type === 'table') {
         const [head, ...rows] = block.rows;
         html.push('<div class="table-wrap"><table><thead><tr>');
@@ -289,8 +304,9 @@
 
   // ---------------- Print-ready PDF HTML ----------------
 
-  function buildPrintHtml(data, turns) {
+  function buildPrintHtml(data, turns, options = {}) {
     const title = documentTitle(data, turns);
+    const pageSize = normalizePageSize(options.pageSize);
     const sections = [];
 
     turns.forEach((turn, idx) => {
@@ -310,9 +326,6 @@
       sections.push('</section>');
     });
 
-    const scope = turns.length === 1 ? 'Single question and answer' : `Complete conversation · ${turns.length} Q&A turns`;
-    const exported = formatDate(new Date());
-
     return `<!doctype html>
 <html lang="en">
 <head>
@@ -321,7 +334,7 @@
 <title>${escapeHtml(title)}</title>
 <style>
 @page {
-  size: A4;
+  size: ${pageSize};
   margin: 19mm 17mm 19mm 17mm;
   @bottom-left { content: "${APP_NAME}"; font: 8.5pt Arial, sans-serif; color: #6b7280; }
   @bottom-right { content: "Page " counter(page) " of " counter(pages); font: 8.5pt Arial, sans-serif; color: #6b7280; }
@@ -331,24 +344,24 @@ html, body { padding: 0; margin: 0; }
 body {
   color: #111827;
   background: #fff;
-  font-family: "Aptos", "Segoe UI", Arial, "Noto Sans", "Noto Sans Sinhala", sans-serif;
+  font-family: "Aptos", "Segoe UI", "Nirmala UI", "Noto Sans Sinhala", "Noto Sans Tamil", "Malgun Gothic", "Segoe UI Emoji", "Apple Color Emoji", Arial, sans-serif;
   font-size: 10.5pt;
   line-height: 1.55;
   -webkit-print-color-adjust: exact;
   print-color-adjust: exact;
 }
 .document { max-width: 178mm; margin: 0 auto; }
-.document-header { margin-bottom: 11mm; padding-bottom: 5mm; border-bottom: 1.2pt solid #111827; }
+.document-header { margin-bottom: 11mm; padding-bottom: 5mm; border-bottom: 1.2pt solid #17365D; }
 .kicker { font-size: 8.5pt; font-weight: 700; letter-spacing: .12em; color: #4b5563; margin-bottom: 3mm; }
-h1 { font-size: 22pt; line-height: 1.18; letter-spacing: -.02em; margin: 0 0 5mm; font-weight: 700; color: #111827; }
+h1 { font-size: 22pt; line-height: 1.18; letter-spacing: -.02em; margin: 0; font-weight: 700; color: #17365D; }
 .meta-grid { width: 100%; border-collapse: collapse; font-size: 8.8pt; color: #4b5563; }
 .meta-grid th { text-align: left; width: 23mm; padding: 1.1mm 3mm 1.1mm 0; color: #111827; font-weight: 650; vertical-align: top; }
 .meta-grid td { padding: 1.1mm 0; overflow-wrap: anywhere; vertical-align: top; }
 .qa-section { padding: 0 0 8mm; margin: 0 0 9mm; border-bottom: .6pt solid #d1d5db; break-inside: auto; }
 .qa-section:last-child { border-bottom: 0; margin-bottom: 0; }
 .section-label, .answer-header { font-size: 8.5pt; font-weight: 750; letter-spacing: .10em; color: #374151; margin: 0 0 3mm; }
-.answer-header { margin-top: 7mm; color: #065f46; }
-.question-content { background: #f8fafc; border-left: 3pt solid #64748b; padding: 4mm 4.5mm; margin-bottom: 5mm; }
+.answer-header { margin-top: 7mm; color: #17365D; }
+.question-content { background: #F5F8FC; border-left: 3pt solid #17365D; padding: 4mm 4.5mm; margin-bottom: 5mm; }
 .answer-content { padding-left: .5mm; }
 h3 { font-size: 14pt; margin: 6mm 0 2.5mm; line-height: 1.25; color: #111827; }
 h4 { font-size: 12pt; margin: 5mm 0 2mm; line-height: 1.3; color: #111827; }
@@ -366,7 +379,11 @@ a { color: #1d4ed8; text-decoration: underline; text-underline-offset: 1px; }
 .table-wrap { margin: 4mm 0; overflow: hidden; }
 table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 9pt; }
 th, td { border: .55pt solid #cbd5e1; padding: 2.1mm 2.4mm; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
-th { background: #f1f5f9; font-weight: 700; color: #111827; }
+th { background: #EEF3F8; font-weight: 700; color: #17365D; }
+.media { margin: 4mm 0; text-align: center; break-inside: avoid; }
+.media img { display: block; max-width: 100%; max-height: 235mm; width: auto; height: auto; object-fit: contain; margin: 0 auto; }
+.math-inline { font-family: "Cambria Math", "Times New Roman", serif; }
+.math-display { margin: 4mm 0; padding: 3mm; text-align: center; white-space: pre-wrap; overflow-wrap: anywhere; font-family: "Cambria Math", "Times New Roman", serif; background: #FAFBFC; border: .5pt solid #D9E2EC; }
 .document-end { margin-top: 10mm; padding-top: 3mm; border-top: .6pt solid #d1d5db; font-size: 8pt; color: #6b7280; }
 @media print { .document-end { display: none; } }
 </style>
@@ -376,21 +393,17 @@ th { background: #f1f5f9; font-weight: 700; color: #111827; }
   <header class="document-header">
     <div class="kicker">CHATGPT CONVERSATION EXPORT</div>
     <h1>${escapeHtml(title)}</h1>
-    <table class="meta-grid" role="presentation">
-      <tr><th>Scope</th><td>${escapeHtml(scope)}</td></tr>
-      <tr><th>Source</th><td>${escapeHtml(data.url || '')}</td></tr>
-      <tr><th>Exported</th><td>${escapeHtml(exported)}</td></tr>
-    </table>
+
   </header>
   ${sections.join('')}
-  <div class="document-end">Generated locally by ${APP_NAME}. Conversation content is reproduced from the currently open ChatGPT thread.</div>
+
 </main>
 </body>
 </html>`;
   }
 
-  function exportPdf(data, turns) {
-    const html = buildPrintHtml(data, turns);
+  function exportPdf(data, turns, options = {}) {
+    const html = buildPrintHtml(data, turns, options);
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const win = window.open(url, '_blank');
@@ -497,13 +510,18 @@ th { background: #f1f5f9; font-weight: 700; color: #111827; }
   function parseInlineTokens(text) {
     const source = String(text || '');
     const tokens = [];
-    const re = /(\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*\n]+\*|_[^_\n]+_|\[[^\]]+\]\(https?:\/\/[^)]+\))/g;
+    const re = /(!\[[^\]]*\]\(https?:\/\/[^)]+\)|\$\$[^$]+\$\$|\$[^$\n]+\$|\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*\n]+\*|_[^_\n]+_|\[[^\]]+\]\(https?:\/\/[^)]+\))/g;
     let last = 0;
     let match;
     while ((match = re.exec(source))) {
       if (match.index > last) tokens.push({ type: 'text', text: source.slice(last, match.index) });
       const value = match[0];
-      if (value.startsWith('**')) tokens.push({ type: 'bold', text: value.slice(2, -2) });
+      if (value.startsWith('![')) {
+        const m = value.match(/^!\[([^\]]*)\]\((https?:\/\/[^)]+)\)$/);
+        tokens.push({ type: 'image', alt: m?.[1] || 'Image', src: m?.[2] || '' });
+      } else if (value.charCodeAt(0) === 36 && value.charCodeAt(1) === 36) tokens.push({ type: 'math', text: value.slice(2, -2).trim(), display: true });
+      else if (value.charCodeAt(0) === 36) tokens.push({ type: 'math', text: value.slice(1, -1).trim(), display: false });
+      else if (value.startsWith('**')) tokens.push({ type: 'bold', text: value.slice(2, -2) });
       else if (value.startsWith('__')) tokens.push({ type: 'bold', text: value.slice(2, -2) });
       else if (value.startsWith('`')) tokens.push({ type: 'code', text: value.slice(1, -1) });
       else if (value.startsWith('[')) {
@@ -516,13 +534,69 @@ th { background: #f1f5f9; font-weight: 700; color: #111827; }
     return tokens;
   }
 
-  function createDocxBlob(data, turns) {
+  async function fetchDocxImageAssets(turns) {
+    const found = new Map();
+    const imageRe = /!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g;
+    for (const turn of turns) {
+      const messages = [turn.question].concat(turn.answers || []);
+      for (const message of messages) {
+        const source = String(message?.markdown || '');
+        let match;
+        imageRe.lastIndex = 0;
+        while ((match = imageRe.exec(source))) {
+          const src = match[2];
+          const alt = match[1] || 'Image';
+          if (!found.has(src) && shouldIncludeImage({ src, alt, width: 800, height: 500 })) found.set(src, { src, alt });
+        }
+      }
+    }
+    const assets = [];
+    for (const item of found.values()) {
+      try {
+        const response = await fetch(item.src, { credentials: 'omit', referrerPolicy: 'no-referrer' });
+        if (!response.ok) continue;
+        const blob = await response.blob();
+        const type = String(blob.type || '').toLowerCase();
+        const ext = type.includes('png') ? 'png' : (type.includes('jpeg') || type.includes('jpg')) ? 'jpg' : type.includes('gif') ? 'gif' : type.includes('webp') ? 'webp' : '';
+        if (!ext) continue;
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        if (!bytes.length) continue;
+        assets.push({ src: item.src, alt: item.alt, bytes, ext, name: 'image' + (assets.length + 1) + '.' + ext, width: 1000, height: 625 });
+      } catch {}
+    }
+    return assets;
+  }
+  async function createDocxBlob(data, turns, options = {}) {
     const title = documentTitle(data, turns);
+    const page = PAGE_SIZES[normalizePageSize(options.pageSize)];
     const hyperlinkRels = [];
+    const imageRels = [];
+    const numberingDefinitions = [];
+    const imageAssets = await fetchDocxImageAssets(turns);
+    const imageMap = new Map(imageAssets.map(asset => [asset.src, asset]));
     let hyperlinkId = 10;
+    let numberingId = 1;
 
+    function imageDrawing(token) {
+      const asset = imageMap.get(token.src);
+      if (!asset) {
+        const id = 'rId' + hyperlinkId++;
+        hyperlinkRels.push('<Relationship Id="' + id + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="' + xmlEscape(token.src) + '" TargetMode="External"/>');
+        return '<w:hyperlink r:id="' + id + '">' + wordRun(token.alt || 'Image', { color: '0563C1', underline: true }) + '</w:hyperlink>';
+      }
+      if (!asset.relId) {
+        asset.relId = 'rId' + hyperlinkId++;
+        imageRels.push('<Relationship Id="' + asset.relId + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/' + asset.name + '"/>');
+      }
+      const cx = Math.round(5.8 * 914400);
+      const cy = Math.max(1, Math.round(cx * (asset.height / Math.max(1, asset.width))));
+      const docPrId = 100 + imageAssets.indexOf(asset);
+      return '<w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0"><wp:extent cx="' + cx + '" cy="' + cy + '"/><wp:docPr id="' + docPrId + '" name="' + xmlEscape(asset.name) + '" descr="' + xmlEscape(token.alt || 'Image') + '"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="' + xmlEscape(asset.name) + '"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="' + asset.relId + '"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + cx + '" cy="' + cy + '"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>';
+    }
     function inlineWordXml(text, base = {}) {
       return parseInlineTokens(text).map(token => {
+        if (token.type === 'image' && token.src) return imageDrawing(token);
+        if (token.type === 'math') return wordRun(token.text, { ...base, code: false });
         if (token.type === 'bold') return wordRun(token.text, { ...base, bold: true });
         if (token.type === 'italic') return wordRun(token.text, { ...base, italic: true });
         if (token.type === 'code') return wordRun(token.text, { ...base, code: true });
@@ -543,7 +617,8 @@ th { background: #f1f5f9; font-weight: 700; color: #111827; }
         opts.keepNext ? '<w:keepNext/>' : '',
         opts.indent ? `<w:ind w:left="${opts.indent}"/>` : '',
         opts.borderLeft ? `<w:pBdr><w:left w:val="single" w:sz="${opts.borderLeft.size || 18}" w:space="8" w:color="${opts.borderLeft.color || '64748B'}"/></w:pBdr>` : '',
-        opts.shading ? `<w:shd w:val="clear" w:color="auto" w:fill="${opts.shading}"/>` : ''
+        opts.shading ? `<w:shd w:val="clear" w:color="auto" w:fill="${opts.shading}"/>` : '',
+        opts.numId ? `<w:numPr><w:ilvl w:val="0"/><w:numId w:val="${opts.numId}"/></w:numPr>` : ''
       ].join('');
       const body = opts.raw ? content : inlineWordXml(content, opts.run || {});
       return `<w:p>${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${body}</w:p>`;
@@ -584,9 +659,9 @@ th { background: #f1f5f9; font-weight: 700; color: #111827; }
         } else if (block.type === 'quote') {
           parts.push(paragraph(block.text, { after: 160, indent: 360, shading: 'F8FAFC', borderLeft: { color: '94A3B8', size: 16 } }));
         } else if (block.type === 'list') {
-          const prefix = block.ordered ? `${block.marker || '1'}. ` : '• ';
-          parts.push(paragraph('', { raw: true, after: 70, indent: 360 })
-            .replace('</w:p>', `${wordRun(prefix, { bold: false })}${inlineWordXml(block.text)}</w:p>`));
+          const id = numberingId++;
+          numberingDefinitions.push({ id, ordered: block.ordered, start: Number(block.marker || 1) || 1 });
+          parts.push(paragraph(inlineWordXml(block.text), { raw: true, after: 70, numId: id }));
         } else if (block.type === 'rule') {
           parts.push('<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="4" w:space="6" w:color="D1D5DB"/></w:pBdr><w:spacing w:before="100" w:after="100"/></w:pPr></w:p>');
         } else if (block.type === 'code') {
@@ -607,14 +682,6 @@ th { background: #f1f5f9; font-weight: 700; color: #111827; }
     body.push(paragraph('CHATGPT CONVERSATION EXPORT', { style: 'Kicker', keepNext: true }));
     body.push(paragraph(title, { style: 'Title', keepNext: true }));
 
-    const scope = turns.length === 1 ? 'Single question and answer' : `Complete conversation · ${turns.length} Q&A turns`;
-    body.push(wordTable([
-      ['Scope', scope],
-      ['Source', data.url || ''],
-      ['Exported', formatDate(new Date())]
-    ], { header: false }));
-    body.push(paragraph(' ', { after: 120 }));
-
     turns.forEach((turn, idx) => {
       const n = Number.isFinite(turn.index) ? turn.index + 1 : idx + 1;
       body.push(paragraph(`QUESTION ${String(n).padStart(2, '0')}`, { style: 'SectionLabel', keepNext: true }));
@@ -634,7 +701,7 @@ th { background: #f1f5f9; font-weight: 700; color: #111827; }
     const sectPr = `<w:sectPr>
       <w:headerReference w:type="default" r:id="rId2"/>
       <w:footerReference w:type="default" r:id="rId3"/>
-      <w:pgSz w:w="11906" w:h="16838"/>
+      <w:pgSz w:w="${page.width}" w:h="${page.height}"/>
       <w:pgMar w:top="1077" w:right="964" w:bottom="1077" w:left="964" w:header="425" w:footer="425" w:gutter="0"/>
     </w:sectPr>`;
 
@@ -666,8 +733,13 @@ th { background: #f1f5f9; font-weight: 700; color: #111827; }
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="png" ContentType="image/png"/>
+  <Default Extension="jpg" ContentType="image/jpeg"/>
+  <Default Extension="gif" ContentType="image/gif"/>
+  <Default Extension="webp" ContentType="image/webp"/>
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
   <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
   <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
   <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
@@ -686,11 +758,16 @@ th { background: #f1f5f9; font-weight: 700; color: #111827; }
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
   <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>
   <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>
+  <Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
   ${hyperlinkRels.join('\n  ')}
+  ${imageRels.join('\n  ')}
 </Relationships>`;
 
     const settingsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:updateFields w:val="true"/><w:defaultTabStop w:val="720"/></w:settings>`;
+
+    const numberingXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${numberingDefinitions.map(def => `<w:abstractNum w:abstractNumId="${def.id}"><w:multiLevelType w:val="singleLevel"/><w:lvl w:ilvl="0"><w:start w:val="${def.start}"/><w:numFmt w:val="${def.ordered ? 'decimal' : 'bullet'}"/><w:lvlText w:val="${def.ordered ? '%1.' : '•'}"/><w:lvlJc w:val="left"/><w:pPr><w:tabs><w:tab w:val="num" w:pos="720"/></w:tabs><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum><w:num w:numId="${def.id}"><w:abstractNumId w:val="${def.id}"/><w:lvlOverride w:ilvl="0"><w:startOverride w:val="${def.start}"/></w:lvlOverride></w:num>`).join('')}</w:numbering>`;
 
     const now = new Date().toISOString();
     const coreXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -709,10 +786,12 @@ th { background: #f1f5f9; font-weight: 700; color: #111827; }
       { name: 'docProps/core.xml', data: coreXml },
       { name: 'word/document.xml', data: documentXml },
       { name: 'word/styles.xml', data: stylesXml },
+      { name: 'word/numbering.xml', data: numberingXml },
       { name: 'word/header1.xml', data: headerXml },
       { name: 'word/footer1.xml', data: footerXml },
       { name: 'word/settings.xml', data: settingsXml },
-      { name: 'word/_rels/document.xml.rels', data: documentRels }
+      { name: 'word/_rels/document.xml.rels', data: documentRels },
+      ...imageAssets.map(asset => ({ name: 'word/media/' + asset.name, data: asset.bytes }))
     ]);
 
     return new Blob([bytes], { type: MIME_DOCX });
@@ -723,12 +802,15 @@ th { background: #f1f5f9; font-weight: 700; color: #111827; }
     downloadBlob(blob, exportFilename(data, turns, 'md'));
   }
 
-  function exportDocx(data, turns) {
-    downloadBlob(createDocxBlob(data, turns), exportFilename(data, turns, 'docx'));
+  async function exportDocx(data, turns, options = {}) {
+    downloadBlob(await createDocxBlob(data, turns, options), exportFilename(data, turns, 'docx'));
   }
 
   globalThis.ChatGPTExporter = Object.freeze({
     normalizeText,
+    normalizePageSize,
+    shouldIncludeImage,
+    PAGE_SIZES,
     safeFilename,
     exportFilename,
     createMarkdown,

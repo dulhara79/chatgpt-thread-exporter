@@ -1,105 +1,105 @@
-# ChatGPT Thread Exporter — V0.2
+# ChatGPT Thread Exporter — V0.3
 
-A local-only Chrome Manifest V3 extension for exporting ChatGPT conversations to professional documents.
+A local-only Chrome Manifest V3 extension for exporting ChatGPT conversations to professional PDF, Microsoft Word (`.docx`), and Markdown.
 
-## Main interaction
+## V0.3 highlights
 
-### Export one Q&A
-An **Export** icon is injected into the action row below every ChatGPT answer, alongside the normal answer controls. Click it and choose:
+- Export one Q&A or the complete rendered conversation.
+- Conversation-level **Export** is inserted immediately to the **left of Share** when Share is discoverable, with a deterministic same-header fallback.
+- No visible **Scope / Source / Exported** metadata table in generated documents.
+- Ordered lists preserve their actual sequence and start values instead of becoming `1, 1, 1...`.
+- Word uses native OOXML numbering definitions.
+- Meaningful images are retained while favicons, avatars, toolbar icons, and tiny decorative assets are filtered.
+- PDF renders meaningful images at document-safe sizes; Word embeds fetchable PNG/JPEG/GIF/WebP images and degrades to a useful link when embedding is unavailable.
+- Common KaTeX/MathJax structures are recovered as TeX where available. Markdown keeps TeX notation, PDF presents readable math, and Word keeps a readable equation fallback.
+- Unicode-first export supports Sinhala, English, Tamil, Korean, mathematical symbols, combining text, and emoji subject to fonts installed on the user's system.
+- **A4 is the default** page size; **Letter** and **Legal** are selectable for PDF and Word.
+- PDF, Word, and Markdown share a restrained professional information hierarchy.
 
-- **PDF document** — professional A4 print layout; Chrome opens the print view so you can choose **Save as PDF**.
-- **Microsoft Word (.docx)** — editable genuine OOXML Word document.
-- **Markdown (.md)** — clean structured Markdown.
+## Document design
 
-That export contains only the user question immediately preceding the selected answer and that specific ChatGPT answer.
+V0.3 uses an original print-first palette rather than copying ChatGPT/OpenAI trade dress:
 
-### Export the whole conversation
-An **Export** button is injected next to ChatGPT's conversation-level **Share** button. Click it and choose PDF, Word, or Markdown to export the complete current thread.
+- Primary navy: `#17365D`
+- Secondary slate: `#475569`
+- Body: `#1F2937`
+- Muted: `#64748B`
+- Border: `#D9E2EC`
+- Question surface: `#F5F8FC`
+- Code surface: `#F3F4F6`
 
-The extension popup is retained as a fallback and also allows selecting multiple Q&A turns manually.
+The design prioritizes clear title, Question/Answer hierarchy, readable tables, code, lists, images, and print-safe spacing.
 
-## Document quality
+## Export one Q&A
 
-V0.2 uses a restrained business / technical-document design instead of copying the ChatGPT web UI.
+Each assistant answer gets an Export control in its action row. It exports exactly the immediately preceding user question and that selected answer.
+
+## Export the whole conversation
+
+Use the **Export** control beside the conversation header Share action. The extension popup remains available as a fallback and supports manual selection of multiple Q&A turns.
+
+## Formats
 
 ### PDF
-- A4 page size and controlled print margins
-- document title and metadata block
-- numbered question sections
-- visually separated question and answer hierarchy
-- print-safe typography and spacing
-- code blocks, lists, block quotes, hyperlinks and Markdown tables
-- print footer with exporter name and page numbering where supported by Chromium paged-media CSS
-- Unicode-friendly browser rendering for Sinhala, Korean and other scripts
+
+Uses Chromium's native print pipeline. The generated print document has professional margins, semantic lists, tables, code, images, math treatment, and multilingual font fallbacks. Choose **Save as PDF** in the browser print dialog.
 
 ### Word (.docx)
-- genuine Microsoft OOXML package, not renamed HTML
-- A4 layout
-- title and metadata table
-- document header
-- footer with `Page X of Y` Word fields
-- structured heading styles
-- shaded question panels
-- answer section labels
-- Word tables for Markdown tables
-- code styling
-- native clickable hyperlinks
-- Unicode content
-- fields marked for refresh when the document is opened
+
+Creates a genuine OOXML package with page geometry, styles, native numbering, tables, hyperlinks, headers/footers, Unicode text, and image relationships.
 
 ### Markdown
-- clean title and metadata
-- explicit question / answer sections
-- original Markdown structure retained where possible
-- source conversation URL and export timestamp
+
+Produces clean semantic Markdown without the old metadata table. Lists, headings, code fences, links, tables, meaningful image references, and TeX are retained where representable.
 
 ## Privacy
 
 - No backend.
-- No analytics.
+- No analytics or telemetry.
 - No API key.
-- No ChatGPT credentials are collected.
-- The extension reads only content already rendered in the active ChatGPT page.
-- File generation happens locally in the browser.
-- Required Chrome permission: `activeTab`, plus host access to ChatGPT pages.
+- No ChatGPT credentials.
+- No undocumented ChatGPT API.
+- Conversation processing and document generation stay in the browser.
+- Permissions remain limited to `activeTab` and ChatGPT host access.
+
+The extension intentionally does not request broad host permissions solely to improve rare cross-origin image cases.
 
 ## Install
 
-1. Extract the ZIP to a permanent folder.
+1. Clone or download the repository.
 2. Open `chrome://extensions`.
 3. Enable **Developer mode**.
 4. Click **Load unpacked**.
-5. Select the extracted folder containing `manifest.json`.
+5. Select the folder containing `manifest.json`.
 6. Open or refresh a conversation on `https://chatgpt.com/`.
 
-After refresh you should see:
+## Development
 
-- a small export/download icon below each ChatGPT answer; and
-- an **Export** button beside the conversation **Share** button.
+Node.js 20+:
 
-## Files
+```bash
+npm test
+npm run check
+```
 
-- `manifest.json` — Chrome Manifest V3 configuration
-- `exporter.js` — shared Markdown, DOCX and PDF/print document engine
-- `content.js` — ChatGPT DOM extraction and in-page UI injection
-- `content.css` — in-page export menus and status UI
-- `popup.html` / `popup.js` — fallback multi-turn selection interface
+The regression suite covers metadata removal, ordered list sequence, A4/Letter/Legal, favicon filtering, multilingual Unicode/emoji, TeX preservation, and DOCX numbering/page geometry.
 
-## Resilience to ChatGPT UI changes
+GitHub Actions runs the same checks on pull requests to `main`.
 
-The extension does not use private ChatGPT APIs. It primarily identifies messages using ChatGPT's rendered `data-message-author-role="user"` and `data-message-author-role="assistant"` attributes.
+## Known limitations
 
-For the action rows and Share button, V0.2 uses multiple selectors plus accessible-label heuristics. A `MutationObserver` automatically re-injects controls when ChatGPT changes routes or lazily renders conversation content.
+- PDF intentionally relies on the browser print dialog.
+- Cross-origin images that cannot be fetched are preserved through useful fallback semantics instead of failing the whole export.
+- Word equations currently use a readable text/math-font fallback rather than native OMML conversion.
+- Interactive ChatGPT widgets may simplify to document-friendly text/links.
+- Only content currently rendered in the ChatGPT DOM can be exported.
 
-If OpenAI changes the DOM substantially in the future, the repair should normally be limited to the selector / toolbar-detection functions in `content.js`.
+## Architecture/design
 
-## Current limitations
+The approved V0.3 design is documented at:
 
-- PDF deliberately uses Chromium's native print pipeline rather than the high-risk debugger permission; choose **Save as PDF** in the print dialog.
-- Images and interactive ChatGPT widgets are not embedded as binary assets yet. Image references/alt text may be represented in Markdown where available.
-- Math is exported from the rendered text/DOM; Word does not yet create native OMML equations.
-- Extremely complex nested HTML tables or interactive components may simplify during export.
+`docs/superpowers/specs/2026-09-04-professional-export-rendering-design.md`
 
 ## Version
 
-V0.2.0
+V0.3.0

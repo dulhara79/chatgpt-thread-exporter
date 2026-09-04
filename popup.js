@@ -79,6 +79,10 @@ function selectedTurns() {
   return (state.data?.turns || []).filter(turn => state.selected.has(turn.id));
 }
 
+function pageSize() {
+  return $('page-size')?.value || 'A4';
+}
+
 $('refresh').addEventListener('click', readCurrentTab);
 $('all').addEventListener('click', () => {
   if (!state.data) return;
@@ -97,12 +101,12 @@ $('md').addEventListener('click', () => {
   setStatus('Markdown exported.');
 });
 
-$('docx').addEventListener('click', () => {
+$('docx').addEventListener('click', async () => {
   const turns = selectedTurns();
   if (!turns.length) return;
   try {
-    exporter.exportDocx(state.data, turns);
-    setStatus('Word document exported.');
+    await exporter.exportDocx(state.data, turns, { pageSize: pageSize() });
+    setStatus('Word document exported (' + pageSize() + ').');
   } catch (error) {
     setStatus(`Word export failed: ${error?.message || error}`, true);
   }
@@ -112,8 +116,8 @@ $('pdf').addEventListener('click', () => {
   const turns = selectedTurns();
   if (!turns.length) return;
   try {
-    exporter.exportPdf(state.data, turns);
-    setStatus('Print view opened — choose “Save as PDF”.');
+    exporter.exportPdf(state.data, turns, { pageSize: pageSize() });
+    setStatus('Print view opened (' + pageSize() + ') — choose “Save as PDF”.');
   } catch (error) {
     setStatus(`PDF export failed: ${error?.message || error}`, true);
   }

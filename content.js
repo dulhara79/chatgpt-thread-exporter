@@ -70,15 +70,33 @@
         return href && !href.startsWith('javascript:') ? `[${label}](${href})` : label;
       }
       if (tag === 'img') {
-        const alt = el.getAttribute('alt') || 'Image';
-        const src = el.getAttribute('src') || '';
-        return src ? `![${alt}](${src})` : `[${alt}]`;
+        const meta = {
+          src: el.currentSrc || el.getAttribute('src') || '',
+          alt: el.getAttribute('alt') || el.getAttribute('aria-label') || 'Image',
+          width: el.naturalWidth || Number(el.getAttribute('width')) || el.getBoundingClientRect().width || 0,
+          height: el.naturalHeight || Number(el.getAttribute('height')) || el.getBoundingClientRect().height || 0,
+          className: String(el.className || ''),
+          role: el.getAttribute('role') || ''
+        };
+        if (!exporter.shouldIncludeImage(meta)) return '';
+        return meta.src ? '![' + meta.alt + '](' + meta.src + ')' : '[' + meta.alt + ']';
+      }
+      const mathClass = String(el.className || '').toLowerCase();
+      if (tag === 'math' || tag === 'mjx-container' || mathClass.includes('katex') || mathClass.includes('mathjax')) {
+        const annotation = el.querySelector('annotation[encoding="application/x-tex"], annotation[encoding="application/tex"]');
+        const tex = normalizeText(annotation?.textContent || el.getAttribute('data-tex') || el.getAttribute('data-latex') || el.getAttribute('aria-label') || el.textContent || '');
+        if (!tex) return '';
+        const dollar = String.fromCharCode(36);
+        const display = mathClass.includes('katex-display') || el.getAttribute('display') === 'block';
+        return display ? '\n\n' + dollar + dollar + tex + dollar + dollar + '\n\n' : dollar + tex + dollar;
       }
       if (tag === 'li') {
         const parent = el.parentElement?.tagName.toLowerCase();
         if (parent === 'ol') {
           const siblings = Array.from(el.parentElement.children).filter(c => c.tagName?.toLowerCase() === 'li');
-          const index = siblings.indexOf(el) + 1;
+          const start = Number(el.parentElement.getAttribute('start') || 1) || 1;
+          const explicit = el.getAttribute('value');
+          const index = explicit !== null ? Number(explicit) : start + siblings.indexOf(el);
           return `${index}. ${normalizeText(child())}\n`;
         }
         return `- ${normalizeText(child())}\n`;
@@ -323,6 +341,20 @@
     return best;
   }
 
+  function findHeaderActionFallback() {
+    const candidates = [];
+    for (const element of document.querySelectorAll('header, nav, [role="banner"], main > div')) {
+      if (!(element instanceof Element)) continue;
+      const rect = element.getBoundingClientRect();
+      if (rect.top > 140 || rect.bottom > 240 || rect.width < 240) continue;
+      const buttons = Array.from(element.querySelectorAll('button')).filter(button => visible(button) && !button.closest('article') && !button.closest('[data-cgx-ui]'));
+      if (!buttons.length || buttons.length > 12) continue;
+      const right = Math.max(...buttons.map(button => button.getBoundingClientRect().right));
+      candidates.push({ element, template: buttons[buttons.length - 1], score: right + (rect.top < 90 ? 300 : 0) });
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates[0] || null;
+  }
   function createThreadExportButton(shareButton) {
     let button;
     if (shareButton) {
@@ -351,11 +383,20 @@
   }
 
   function decorateThreadHeader() {
-    if (document.getElementById(THREAD_BUTTON_ID)) return;
+    const existing = document.getElementById(THREAD_BUTTON_ID);
     const shareButton = findShareButton();
-    if (!shareButton?.parentElement) return;
-    const button = createThreadExportButton(shareButton);
-    shareButton.insertAdjacentElement('afterend', button);
+    if (shareButton?.parentElement) {
+      if (existing) {
+        if (existing.parentElement !== shareButton.parentElement || existing.nextElementSibling !== shareButton) shareButton.insertAdjacentElement('beforebegin', existing);
+        return;
+      }
+      shareButton.insertAdjacentElement('beforebegin', createThreadExportButton(shareButton));
+      return;
+    }
+    if (existing) return;
+    const fallback = findHeaderActionFallback();
+    if (!fallback) return;
+    fallback.element.appendChild(createThreadExportButton(fallback.template));
   }
 
   function closeMenu() {
@@ -393,26 +434,28 @@
     menu.setAttribute('role', 'menu');
     menu.innerHTML = `
       <div class="cgx-menu-heading">${heading}</div>
-      <button type="button" data-format="pdf" role="menuitem">${formatIcon('pdf')}<span><strong>PDF document</strong><small>Professional A4 · opens Save as PDF</small></span></button>
-      <button type="button" data-format="docx" role="menuitem">${formatIcon('docx')}<span><strong>Microsoft Word</strong><small>Editable .docx with header & page numbers</small></span></button>
-      <button type="button" data-format="md" role="menuitem">${formatIcon('md')}<span><strong>Markdown</strong><small>Clean structured .md file</small></span></button>`;
+      <label class="cgx-page-size"><span>Page size</span><select data-page-size aria-label="Document page size"><option value="A4" selected>A4 (default)</option><option value="Letter">Letter</option><option value="Legal">Legal</option></select></label>
+      <button type="button" data-format="pdf" role="menuitem">${formatIcon('pdf')}<span><strong>PDF document</strong><small>Professional print-ready document</small></span></button>
+      <button type="button" data-format="docx" role="menuitem">${formatIcon('docx')}<span><strong>Microsoft Word</strong><small>Editable .docx with native numbering</small></span></button>
+      <button type="button" data-format="md" role="menuitem">${formatIcon('md')}<span><strong>Markdown</strong><small>Clean semantic .md file</small></span></button>`;
 
     document.body.appendChild(menu);
     positionMenu(menu, anchor);
 
     menu.querySelectorAll('button[data-format]').forEach(button => {
-      button.addEventListener('click', event => {
+      button.addEventListener('click', async event => {
         event.preventDefault();
         event.stopPropagation();
         const format = button.dataset.format;
+        const pageSize = menu.querySelector('[data-page-size]')?.value || 'A4';
         try {
           const data = dataProvider();
           if (!data?.turns?.length) throw new Error('No question-and-answer content was found.');
-          if (format === 'pdf') exporter.exportPdf(data, data.turns);
-          else if (format === 'docx') exporter.exportDocx(data, data.turns);
+          if (format === 'pdf') exporter.exportPdf(data, data.turns, { pageSize });
+          else if (format === 'docx') await exporter.exportDocx(data, data.turns, { pageSize });
           else exporter.exportMarkdown(data, data.turns);
           closeMenu();
-          showToast(format === 'pdf' ? 'Print view opened — choose Save as PDF.' : `Exported ${format === 'docx' ? 'Word document' : 'Markdown file'}.`);
+          showToast(format === 'pdf' ? 'Print view opened (' + pageSize + ') — choose Save as PDF.' : 'Exported ' + (format === 'docx' ? 'Word document (' + pageSize + ')' : 'Markdown file') + '.');
         } catch (error) {
           closeMenu();
           showToast(error?.message || String(error), true);
