@@ -496,11 +496,11 @@
         try {
           const data = dataProvider();
           if (!data?.turns?.length) throw new Error('No question-and-answer content was found.');
-          if (format === 'pdf') exporter.exportPdf(data, data.turns, { pageSize });
+          if (format === 'pdf') await exporter.exportPdf(data, data.turns, { pageSize });
           else if (format === 'docx') await exporter.exportDocx(data, data.turns, { pageSize });
           else exporter.exportMarkdown(data, data.turns);
           closeMenu();
-          showToast(format === 'pdf' ? 'Print view opened (' + pageSize + ') — choose Save as PDF.' : 'Exported ' + (format === 'docx' ? 'Word document (' + pageSize + ')' : 'Markdown file') + '.');
+          showToast(format === 'pdf' ? 'PDF downloaded as ' + exporter.safeFilename(data.title || 'ChatGPT Conversation') + '.pdf.' : 'Exported ' + (format === 'docx' ? 'Word document (' + pageSize + ')' : 'Markdown file') + '.');
         } catch (error) {
           closeMenu();
           showToast(error?.message || String(error), true);

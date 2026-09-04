@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+require('../math.js');
 require('../exporter.js');
 const exporter = globalThis.ChatGPTExporter;
 
@@ -99,4 +100,59 @@ test('professional PDF typography uses restrained document palette and standard 
   assert.match(html, /#183B56/);
   assert.match(html, /#F7F9FC/);
   assert.match(html, /Cascadia Mono/);
+});
+
+test('equations render as structural MathML instead of raw LaTeX text', () => {
+  const equationTurns = [{
+    id: 'turn-equation',
+    index: 0,
+    question: { role: 'user', text: 'Show equation', markdown: 'Show equation' },
+    answers: [{
+      role: 'assistant',
+      text: 'Equation',
+      markdown: '$$\\frac{x^2+1}{\\sqrt{y}} = \\sum_{i=1}^{n} i$$'
+    }]
+  }];
+  const html = exporter.buildPrintHtml(data, equationTurns);
+  assert.match(html, /<math xmlns="http:\/\/www\.w3\.org\/1998\/Math\/MathML"/);
+  assert.match(html, /<mfrac>/);
+  assert.match(html, /<msqrt>/);
+  assert.match(html, /<msubsup>/);
+  assert.doesNotMatch(html, />\\frac\{/);
+});
+
+test('DOCX equations use native OMML structures', async () => {
+  const equationTurns = [{
+    id: 'turn-equation',
+    index: 0,
+    question: { role: 'user', text: 'Show equation', markdown: 'Show equation' },
+    answers: [{
+      role: 'assistant',
+      text: 'Equation',
+      markdown: '$$\\frac{x^2+1}{\\sqrt{y}}$$'
+    }]
+  }];
+  const blob = await exporter.createDocxBlob(data, equationTurns, { pageSize: 'A4' });
+  const raw = new TextDecoder().decode(new Uint8Array(await blob.arrayBuffer()));
+  assert.match(raw, /xmlns:m="http:\/\/schemas\.openxmlformats\.org\/officeDocument\/2006\/math"/);
+  assert.match(raw, /<m:oMathPara>/);
+  assert.match(raw, /<m:f>/);
+  assert.match(raw, /<m:rad>/);
+  assert.match(raw, /<m:sSup>/);
+});
+
+test('PDF export uses background direct download with conversation-title filename', () => {
+  const exporterSource = fs.readFileSync(require.resolve('../exporter.js'), 'utf8');
+  const backgroundSource = fs.readFileSync(require.resolve('../background.js'), 'utf8');
+  assert.match(exporterSource, /CGX_EXPORT_PDF/);
+  assert.doesNotMatch(exporterSource, /window\.open\(url/);
+  assert.doesNotMatch(exporterSource, /win\.print\(\)/);
+  assert.match(backgroundSource, /Page\.printToPDF/);
+  assert.match(backgroundSource, /chrome\.downloads\.download/);
+  assert.match(backgroundSource, /saveAs: false/);
+});
+
+test('A4 remains the default PDF page size', () => {
+  assert.equal(exporter.normalizePageSize(), 'A4');
+  assert.match(exporter.buildPrintHtml(data, turns), /size: A4/);
 });

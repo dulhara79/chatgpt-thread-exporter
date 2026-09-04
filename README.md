@@ -1,8 +1,8 @@
-# ChatGPT Thread Exporter — V0.3.1
+# ChatGPT Thread Exporter — V0.3.2
 
 A local-only Chrome Manifest V3 extension for exporting ChatGPT conversations to professional PDF, Microsoft Word (`.docx`), and Markdown.
 
-## V0.3.1 highlights
+## V0.3.2 highlights
 
 - Export one Q&A or the complete rendered conversation.
 - Every assistant answer gets a self-healing download/export control. If ChatGPT React re-renders an action row and removes the control, the extension inserts it again.
@@ -13,7 +13,7 @@ A local-only Chrome Manifest V3 extension for exporting ChatGPT conversations to
 - Meaningful images are retained while favicons, avatars, toolbar icons, and tiny decorative assets are filtered.
 - Content-bearing SVG diagrams are preserved. PDF renders them directly; Word rasterizes rendered SVG diagrams locally before embedding them.
 - PDF renders meaningful images at document-safe sizes; Word embeds fetchable PNG/JPEG/GIF/WebP images and degrades to a useful link when embedding is unavailable.
-- Common KaTeX/MathJax structures are recovered as TeX where available. Markdown keeps TeX notation, PDF presents readable math, and Word keeps a readable equation fallback.
+- Common KaTeX/MathJax structures are recovered as TeX where available. PDF converts supported LaTeX structures to native MathML, while Word writes native OMML equations for fractions, roots, powers/subscripts, Greek symbols, sums/integrals, matrices, and common operators. Markdown keeps the original TeX notation.
 - Unicode-first export supports Sinhala, English, Tamil, Korean, mathematical symbols, combining text, and emoji subject to fonts installed on the user's system.
 - **A4 is the default** page size; **Letter** and **Legal** are selectable for PDF and Word.
 - PDF, Word, and Markdown share a restrained professional information hierarchy with 10.5 pt body text, 23 pt document titles, navy/slate headings, subtle rules, Aptos/Segoe UI/Nirmala UI fallbacks, Cascadia Mono/Consolas code, and print-safe spacing.
@@ -44,11 +44,11 @@ Use the **Export** control beside the conversation header Share action. The exte
 
 ### PDF
 
-Uses Chromium's native print pipeline. The generated print document has professional margins, semantic lists, tables, code, images, math treatment, and multilingual font fallbacks. Choose **Save as PDF** in the browser print dialog.
+Uses Chromium's native PDF renderer through the extension background service worker. Clicking **PDF** downloads the file directly without opening a new page or showing the print dialog. The PDF filename is the conversation title. A4 remains the default page size.
 
 ### Word (.docx)
 
-Creates a genuine OOXML package with page geometry, styles, native numbering, tables, hyperlinks, headers/footers, Unicode text, and image relationships.
+Creates a genuine OOXML package with page geometry, styles, native numbering, tables, hyperlinks, headers/footers, Unicode text, image relationships, and native OMML equations.
 
 ### Markdown
 
@@ -62,7 +62,7 @@ Produces clean semantic Markdown without the old metadata table. Lists, headings
 - No ChatGPT credentials.
 - No undocumented ChatGPT API.
 - Conversation processing and document generation stay in the browser.
-- Permissions remain limited to `activeTab` and ChatGPT host access.
+- Permissions include `activeTab`, `debugger`, and `downloads`, plus ChatGPT host access. `debugger` is used only on the extension-created temporary render tab for Chrome's native PDF renderer; `downloads` saves the generated PDF automatically.
 
 The extension intentionally does not request broad host permissions solely to improve rare cross-origin image cases.
 
@@ -77,7 +77,7 @@ The extension intentionally does not request broad host permissions solely to im
 
 ## Development
 
-Node.js 20+:
+Node.js 24+:
 
 ```bash
 npm test
@@ -90,9 +90,8 @@ GitHub Actions runs the same checks on pull requests to `main`.
 
 ## Known limitations
 
-- PDF intentionally relies on the browser print dialog.
 - Cross-origin images that cannot be fetched are preserved through useful fallback semantics instead of failing the whole export.
-- Word equations currently use a readable text/math-font fallback rather than native OMML conversion.
+- The built-in LaTeX parser covers common mathematical structures; uncommon custom TeX macros may fall back to readable equation text.
 - Interactive ChatGPT widgets may simplify to document-friendly text/links.
 - Only content currently rendered in the ChatGPT DOM can be exported.
 
@@ -104,4 +103,4 @@ The approved V0.3 design is documented at:
 
 ## Version
 
-V0.3.1
+V0.3.2

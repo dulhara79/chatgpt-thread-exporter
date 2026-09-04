@@ -3,6 +3,7 @@
 
   const APP_NAME = 'ChatGPT Thread Exporter';
   const MIME_DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const mathRenderer = globalThis.ChatGPTMath || null;
 
   const PAGE_SIZES = Object.freeze({
     A4: { css: 'A4', width: 11906, height: 16838 },
@@ -224,6 +225,10 @@
     return blocks;
   }
 
+  function renderMathHtml(tex, display = false) {
+    if (mathRenderer?.toMathML) return mathRenderer.toMathML(tex, display);
+    return '<span class="math-fallback">' + escapeHtml(tex) + '</span>';
+  }
   function inlineToHtml(text) {
     const source = String(text || '');
     const tokens = [];
@@ -238,8 +243,10 @@
       .replace(/`([^`]+)`/g, (_, code) => stash('<code class="inline-code">' + escapeHtml(code) + '</code>'))
       .replace(/!\[([^\]]*)\]\((https?:\/\/[^)]+|data:image\/[^)]+)\)/g, (_, alt, src) => stash('<figure class="media"><img src="' + escapeHtml(src) + '" alt="' + escapeHtml(alt || 'Image') + '" referrerpolicy="no-referrer"></figure>'))
       .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, (_, label, href) => stash('<a href="' + escapeHtml(href) + '">' + escapeHtml(label) + '</a>'))
-      .replace(/\$\$([^$]+)\$\$/g, (_, tex) => stash('<div class="math-display">' + escapeHtml(tex.trim()) + '</div>'))
-      .replace(/\$([^$\n]+)\$/g, (_, tex) => stash('<span class="math-inline">' + escapeHtml(tex.trim()) + '</span>'));
+      .replace(/\\\[([\s\S]*?)\\\]/g, (_, tex) => stash('<div class="math-display">' + renderMathHtml(tex.trim(), true) + '</div>'))
+      .replace(/\$\$([\s\S]*?)\$\$/g, (_, tex) => stash('<div class="math-display">' + renderMathHtml(tex.trim(), true) + '</div>'))
+      .replace(/\\\((.*?)\\\)/g, (_, tex) => stash('<span class="math-inline">' + renderMathHtml(tex.trim(), false) + '</span>'))
+      .replace(/\$([^$\n]+)\$/g, (_, tex) => stash('<span class="math-inline">' + renderMathHtml(tex.trim(), false) + '</span>'));
 
     value = escapeHtml(value)
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
@@ -385,8 +392,11 @@ th, td { border: .55pt solid #cbd5e1; padding: 2.1mm 2.4mm; text-align: left; ve
 th { background: #EEF3F8; font-weight: 700; color: #183B56; }
 .media { margin: 4mm 0; text-align: center; break-inside: avoid; }
 .media img { display: block; max-width: 100%; max-height: 235mm; width: auto; height: auto; object-fit: contain; margin: 0 auto; }
-.math-inline { font-family: "Cambria Math", "Times New Roman", serif; }
-.math-display { margin: 4mm 0; padding: 3mm 4mm; text-align: center; white-space: pre-wrap; overflow-wrap: anywhere; font-family: "Cambria Math", "Times New Roman", serif; font-size: 10.8pt; background: #FBFCFD; border: .5pt solid #D8E1EB; }
+.math-inline { display: inline-flex; align-items: baseline; vertical-align: baseline; font-family: "Cambria Math", "STIX Two Math", "Times New Roman", serif; }
+.math-inline math { font-size: 1.08em; }
+.math-display { margin: 4mm 0; padding: 3.5mm 4mm; display: flex; justify-content: center; align-items: center; overflow-x: auto; overflow-y: hidden; font-family: "Cambria Math", "STIX Two Math", "Times New Roman", serif; font-size: 11.2pt; background: #FBFCFD; border: .5pt solid #D8E1EB; break-inside: avoid; }
+.math-display math { font-size: 1.12em; max-width: 100%; }
+.math-fallback { white-space: pre-wrap; }
 </style>
 </head>
 <body>
@@ -403,21 +413,19 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
 </html>`;
   }
 
-  function exportPdf(data, turns, options = {}) {
-    const html = buildPrintHtml(data, turns, options);
-    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const win = window.open(url, '_blank');
-    if (!win) {
-      URL.revokeObjectURL(url);
-      throw new Error('The browser blocked the print window. Allow pop-ups for ChatGPT and try again.');
-    }
-    const cleanup = () => setTimeout(() => URL.revokeObjectURL(url), 15000);
-    win.addEventListener('load', () => {
-      setTimeout(() => {
-        try { win.focus(); win.print(); } finally { cleanup(); }
-      }, 250);
-    }, { once: true });
+  async function exportPdf(data, turns, options = {}) {
+    const pageSize = normalizePageSize(options.pageSize || 'A4');
+    const html = buildPrintHtml(data, turns, { ...options, pageSize });
+    const filename = safeFilename(data?.title || 'ChatGPT Conversation');
+    if (!globalThis.chrome?.runtime?.sendMessage) throw new Error('Direct PDF download is only available inside the Chrome extension.');
+    const response = await chrome.runtime.sendMessage({
+      type: 'CGX_EXPORT_PDF',
+      html,
+      filename,
+      pageSize
+    });
+    if (!response?.ok) throw new Error(response?.error || 'PDF generation failed.');
+    return response;
   }
 
   // ---------------- DOCX / OOXML ----------------
@@ -511,7 +519,7 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
   function parseInlineTokens(text) {
     const source = String(text || '');
     const tokens = [];
-    const re = /(!\[[^\]]*\]\((?:https?:\/\/[^)]+|data:image\/[^)]+)\)|\$\$[^$]+\$\$|\$[^$\n]+\$|\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*\n]+\*|_[^_\n]+_|\[[^\]]+\]\(https?:\/\/[^)]+\))/g;
+    const re = /(!\[[^\]]*\]\((?:https?:\/\/[^)]+|data:image\/[^)]+)\)|\\\[[\s\S]*?\\\]|\$\$[\s\S]*?\$\$|\\\([^\n]*?\\\)|\$[^$\n]+\$|\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*\n]+\*|_[^_\n]+_|\[[^\]]+\]\(https?:\/\/[^)]+\))/g;
     let last = 0;
     let match;
     while ((match = re.exec(source))) {
@@ -520,7 +528,9 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
       if (value.startsWith('![')) {
         const m = value.match(/^!\[([^\]]*)\]\((https?:\/\/[^)]+|data:image\/[^)]+)\)$/);
         tokens.push({ type: 'image', alt: m?.[1] || 'Image', src: m?.[2] || '' });
-      } else if (value.charCodeAt(0) === 36 && value.charCodeAt(1) === 36) tokens.push({ type: 'math', text: value.slice(2, -2).trim(), display: true });
+      } else if (value.startsWith('\\[')) tokens.push({ type: 'math', text: value.slice(2, -2).trim(), display: true });
+      else if (value.charCodeAt(0) === 36 && value.charCodeAt(1) === 36) tokens.push({ type: 'math', text: value.slice(2, -2).trim(), display: true });
+      else if (value.startsWith('\\(')) tokens.push({ type: 'math', text: value.slice(2, -2).trim(), display: false });
       else if (value.charCodeAt(0) === 36) tokens.push({ type: 'math', text: value.slice(1, -1).trim(), display: false });
       else if (value.startsWith('**')) tokens.push({ type: 'bold', text: value.slice(2, -2) });
       else if (value.startsWith('__')) tokens.push({ type: 'bold', text: value.slice(2, -2) });
@@ -632,7 +642,7 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
     function inlineWordXml(text, base = {}) {
       return parseInlineTokens(text).map(token => {
         if (token.type === 'image' && token.src) return imageDrawing(token);
-        if (token.type === 'math') return wordRun(token.text, { ...base, code: false });
+        if (token.type === 'math') return mathRenderer?.toOmml ? mathRenderer.toOmml(token.text) : wordRun(token.text, { ...base, code: false });
         if (token.type === 'bold') return wordRun(token.text, { ...base, bold: true });
         if (token.type === 'italic') return wordRun(token.text, { ...base, italic: true });
         if (token.type === 'code') return wordRun(token.text, { ...base, code: true });
@@ -691,7 +701,10 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
           const style = block.level <= 1 ? 'Heading2' : block.level === 2 ? 'Heading3' : 'Heading4';
           parts.push(paragraph(block.text, { style, keepNext: true }));
         } else if (block.type === 'text') {
-          parts.push(paragraph(block.text, { after: 150, line: 300 }));
+          const trimmed = String(block.text || '').trim();
+          const displayMatch = trimmed.match(/^\$\$([\s\S]*)\$\$/) || trimmed.match(/^\\\[([\s\S]*)\\\]$/);
+          if (displayMatch && mathRenderer?.toOmmlParagraph) parts.push(mathRenderer.toOmmlParagraph(displayMatch[1].trim()));
+          else parts.push(paragraph(block.text, { after: 150, line: 300 }));
         } else if (block.type === 'quote') {
           parts.push(paragraph(block.text, { after: 160, indent: 360, shading: 'F8FAFC', borderLeft: { color: '94A3B8', size: 16 } }));
         } else if (block.type === 'list') {
@@ -742,7 +755,7 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
     </w:sectPr>`;
 
     const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
 <w:body>${body.join('')}${sectPr}</w:body></w:document>`;
 
     const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
