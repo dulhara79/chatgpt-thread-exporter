@@ -1,0 +1,171 @@
+.cgx-inline-export-button {
+  position: relative;
+}
+
+.cgx-inline-export-button svg,
+.cgx-thread-export-button svg {
+  display: block;
+  flex: 0 0 auto;
+  pointer-events: none;
+}
+
+.cgx-fallback-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.cgx-fallback-actions .cgx-inline-export-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.cgx-fallback-actions .cgx-inline-export-button:hover {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.cgx-thread-export-button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
+  white-space: nowrap;
+}
+
+.cgx-thread-label {
+  line-height: 1;
+}
+
+.cgx-export-menu {
+  position: fixed;
+  z-index: 2147483647;
+  width: 286px;
+  padding: 7px;
+  border: 1px solid rgba(0, 0, 0, .12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .98);
+  color: #18181b;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .16), 0 2px 8px rgba(0, 0, 0, .08);
+  backdrop-filter: blur(14px);
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.dark .cgx-export-menu,
+html.dark .cgx-export-menu,
+[data-theme="dark"] .cgx-export-menu {
+  border-color: rgba(255, 255, 255, .13);
+  background: rgba(38, 38, 38, .98);
+  color: #f4f4f5;
+  box-shadow: 0 18px 52px rgba(0, 0, 0, .45), 0 2px 8px rgba(0, 0, 0, .28);
+}
+
+.cgx-menu-heading {
+  padding: 8px 9px 7px;
+  color: #71717a;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+
+.dark .cgx-menu-heading,
+html.dark .cgx-menu-heading,
+[data-theme="dark"] .cgx-menu-heading {
+  color: #a1a1aa;
+}
+
+.cgx-export-menu > button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 9px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.cgx-export-menu > button:hover {
+  background: #f4f4f5;
+}
+
+.dark .cgx-export-menu > button:hover,
+html.dark .cgx-export-menu > button:hover,
+[data-theme="dark"] .cgx-export-menu > button:hover {
+  background: rgba(255, 255, 255, .08);
+}
+
+.cgx-export-menu > button > span:last-child {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cgx-export-menu strong {
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.cgx-export-menu small {
+  color: #71717a;
+  font-size: 10.5px;
+  line-height: 1.25;
+}
+
+.dark .cgx-export-menu small,
+html.dark .cgx-export-menu small,
+[data-theme="dark"] .cgx-export-menu small {
+  color: #a1a1aa;
+}
+
+.cgx-format-badge {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: -.02em;
+}
+
+.cgx-format-pdf { background: #fee2e2; color: #991b1b; }
+.cgx-format-docx { background: #dbeafe; color: #1e40af; font-size: 16px; }
+.cgx-format-md { background: #e5e7eb; color: #1f2937; }
+
+.cgx-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  z-index: 2147483647;
+  transform: translate(-50%, 10px);
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #18181b;
+  color: #fff;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .22);
+  opacity: 0;
+  transition: opacity .18s ease, transform .18s ease;
+  font: 600 12px/1.35 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  pointer-events: none;
+}
+
+.cgx-toast-visible { opacity: 1; transform: translate(-50%, 0); }
+.cgx-toast-error { background: #991b1b; }
