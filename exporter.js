@@ -510,13 +510,18 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
   function parseInlineTokens(text) {
     const source = String(text || '');
     const tokens = [];
-    const re = /(\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*\n]+\*|_[^_\n]+_|\[[^\]]+\]\(https?:\/\/[^)]+\))/g;
+    const re = /(!\[[^\]]*\]\(https?:\/\/[^)]+\)|\$\$[^$]+\$\$|\$[^$\n]+\$|\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*\n]+\*|_[^_\n]+_|\[[^\]]+\]\(https?:\/\/[^)]+\))/g;
     let last = 0;
     let match;
     while ((match = re.exec(source))) {
       if (match.index > last) tokens.push({ type: 'text', text: source.slice(last, match.index) });
       const value = match[0];
-      if (value.startsWith('**')) tokens.push({ type: 'bold', text: value.slice(2, -2) });
+      if (value.startsWith('![')) {
+        const m = value.match(/^!\[([^\]]*)\]\((https?:\/\/[^)]+)\)$/);
+        tokens.push({ type: 'image', alt: m?.[1] || 'Image', src: m?.[2] || '' });
+      } else if (value.charCodeAt(0) === 36 && value.charCodeAt(1) === 36) tokens.push({ type: 'math', text: value.slice(2, -2).trim(), display: true });
+      else if (value.charCodeAt(0) === 36) tokens.push({ type: 'math', text: value.slice(1, -1).trim(), display: false });
+      else if (value.startsWith('**')) tokens.push({ type: 'bold', text: value.slice(2, -2) });
       else if (value.startsWith('__')) tokens.push({ type: 'bold', text: value.slice(2, -2) });
       else if (value.startsWith('`')) tokens.push({ type: 'code', text: value.slice(1, -1) });
       else if (value.startsWith('[')) {
@@ -529,16 +534,69 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
     return tokens;
   }
 
-  function createDocxBlob(data, turns, options = {}) {
+  async function fetchDocxImageAssets(turns) {
+    const found = new Map();
+    const imageRe = /!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g;
+    for (const turn of turns) {
+      const messages = [turn.question].concat(turn.answers || []);
+      for (const message of messages) {
+        const source = String(message?.markdown || '');
+        let match;
+        imageRe.lastIndex = 0;
+        while ((match = imageRe.exec(source))) {
+          const src = match[2];
+          const alt = match[1] || 'Image';
+          if (!found.has(src) && shouldIncludeImage({ src, alt, width: 800, height: 500 })) found.set(src, { src, alt });
+        }
+      }
+    }
+    const assets = [];
+    for (const item of found.values()) {
+      try {
+        const response = await fetch(item.src, { credentials: 'omit', referrerPolicy: 'no-referrer' });
+        if (!response.ok) continue;
+        const blob = await response.blob();
+        const type = String(blob.type || '').toLowerCase();
+        const ext = type.includes('png') ? 'png' : (type.includes('jpeg') || type.includes('jpg')) ? 'jpg' : type.includes('gif') ? 'gif' : type.includes('webp') ? 'webp' : '';
+        if (!ext) continue;
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        if (!bytes.length) continue;
+        assets.push({ src: item.src, alt: item.alt, bytes, ext, name: 'image' + (assets.length + 1) + '.' + ext, width: 1000, height: 625 });
+      } catch {}
+    }
+    return assets;
+  }
+  async function createDocxBlob(data, turns, options = {}) {
     const title = documentTitle(data, turns);
     const page = PAGE_SIZES[normalizePageSize(options.pageSize)];
     const hyperlinkRels = [];
+    const imageRels = [];
     const numberingDefinitions = [];
+    const imageAssets = await fetchDocxImageAssets(turns);
+    const imageMap = new Map(imageAssets.map(asset => [asset.src, asset]));
     let hyperlinkId = 10;
     let numberingId = 1;
 
+    function imageDrawing(token) {
+      const asset = imageMap.get(token.src);
+      if (!asset) {
+        const id = 'rId' + hyperlinkId++;
+        hyperlinkRels.push('<Relationship Id="' + id + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="' + xmlEscape(token.src) + '" TargetMode="External"/>');
+        return '<w:hyperlink r:id="' + id + '">' + wordRun(token.alt || 'Image', { color: '0563C1', underline: true }) + '</w:hyperlink>';
+      }
+      if (!asset.relId) {
+        asset.relId = 'rId' + hyperlinkId++;
+        imageRels.push('<Relationship Id="' + asset.relId + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/' + asset.name + '"/>');
+      }
+      const cx = Math.round(5.8 * 914400);
+      const cy = Math.max(1, Math.round(cx * (asset.height / Math.max(1, asset.width))));
+      const docPrId = 100 + imageAssets.indexOf(asset);
+      return '<w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0"><wp:extent cx="' + cx + '" cy="' + cy + '"/><wp:docPr id="' + docPrId + '" name="' + xmlEscape(asset.name) + '" descr="' + xmlEscape(token.alt || 'Image') + '"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="' + xmlEscape(asset.name) + '"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="' + asset.relId + '"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + cx + '" cy="' + cy + '"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>';
+    }
     function inlineWordXml(text, base = {}) {
       return parseInlineTokens(text).map(token => {
+        if (token.type === 'image' && token.src) return imageDrawing(token);
+        if (token.type === 'math') return wordRun(token.text, { ...base, code: false });
         if (token.type === 'bold') return wordRun(token.text, { ...base, bold: true });
         if (token.type === 'italic') return wordRun(token.text, { ...base, italic: true });
         if (token.type === 'code') return wordRun(token.text, { ...base, code: true });
@@ -675,6 +733,10 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="png" ContentType="image/png"/>
+  <Default Extension="jpg" ContentType="image/jpeg"/>
+  <Default Extension="gif" ContentType="image/gif"/>
+  <Default Extension="webp" ContentType="image/webp"/>
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
   <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
@@ -698,6 +760,7 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
   <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>
   <Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
   ${hyperlinkRels.join('\n  ')}
+  ${imageRels.join('\n  ')}
 </Relationships>`;
 
     const settingsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -727,7 +790,8 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
       { name: 'word/header1.xml', data: headerXml },
       { name: 'word/footer1.xml', data: footerXml },
       { name: 'word/settings.xml', data: settingsXml },
-      { name: 'word/_rels/document.xml.rels', data: documentRels }
+      { name: 'word/_rels/document.xml.rels', data: documentRels },
+      ...imageAssets.map(asset => ({ name: 'word/media/' + asset.name, data: asset.bytes }))
     ]);
 
     return new Blob([bytes], { type: MIME_DOCX });
@@ -738,8 +802,8 @@ th { background: #EEF3F8; font-weight: 700; color: #17365D; }
     downloadBlob(blob, exportFilename(data, turns, 'md'));
   }
 
-  function exportDocx(data, turns, options = {}) {
-    downloadBlob(createDocxBlob(data, turns, options), exportFilename(data, turns, 'docx'));
+  async function exportDocx(data, turns, options = {}) {
+    downloadBlob(await createDocxBlob(data, turns, options), exportFilename(data, turns, 'docx'));
   }
 
   globalThis.ChatGPTExporter = Object.freeze({
