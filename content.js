@@ -30,7 +30,7 @@
     const clone = root.cloneNode(true);
 
     clone.querySelectorAll(
-      `button, script, style, svg, .${EXPORT_BUTTON_CLASS}, #${THREAD_BUTTON_ID}, [data-cgx-ui], ` +
+      `button, script, style, .${EXPORT_BUTTON_CLASS}, #${THREAD_BUTTON_ID}, [data-cgx-ui], ` +
       '[data-testid*="copy"], [data-testid*="feedback"]'
     ).forEach(el => el.remove());
 
@@ -68,6 +68,22 @@
         const label = normalizeText(child()) || el.getAttribute('href') || '';
         const href = el.getAttribute('href') || '';
         return href && !href.startsWith('javascript:') ? `[${label}](${href})` : label;
+      }
+      if (tag === 'svg') {
+        const viewBox = String(el.getAttribute('viewBox') || '').trim().split(/[ ,]+/).map(Number);
+        const width = Number(el.getAttribute('width')) || (viewBox.length === 4 ? Math.abs(viewBox[2]) : 0);
+        const height = Number(el.getAttribute('height')) || (viewBox.length === 4 ? Math.abs(viewBox[3]) : 0);
+        const textCount = el.querySelectorAll('text, foreignObject').length;
+        const shapeCount = el.querySelectorAll('path, rect, circle, ellipse, polygon, polyline, line').length;
+        const meaningful = (width >= 160 && height >= 80) || textCount >= 2 || shapeCount >= 8;
+        if (!meaningful) return '';
+        try {
+          const serialized = new XMLSerializer().serializeToString(el);
+          const encoded = btoa(unescape(encodeURIComponent(serialized)));
+          return '![Diagram](data:image/svg+xml;base64,' + encoded + ')';
+        } catch {
+          return normalizeText(el.textContent || '');
+        }
       }
       if (tag === 'img') {
         const meta = {
@@ -232,48 +248,75 @@
     </svg>`;
   }
 
-  function findActionToolbar(assistantNode) {
-    const article = assistantNode.closest('article') || assistantNode.parentElement?.closest('article') || assistantNode.parentElement;
-    if (!article) return null;
-
-    const buttons = Array.from(article.querySelectorAll('button')).filter(btn => !btn.classList.contains(EXPORT_BUTTON_CLASS));
-    const copyButton = buttons.find(btn => {
-      const testid = (btn.getAttribute('data-testid') || '').toLowerCase();
-      const label = `${btn.getAttribute('aria-label') || ''} ${btn.getAttribute('title') || ''}`.toLowerCase();
-      return testid.includes('copy') || /(^|\s)copy(\s|$)/.test(label) || label.includes('copy response');
-    });
-    if (!copyButton) return null;
-
-    let current = copyButton.parentElement;
-    let best = current;
-    while (current && current !== article) {
-      const count = current.querySelectorAll(':scope button').length || current.querySelectorAll('button').length;
-      if (count >= 2 && count <= 12) best = current;
-      if (current.querySelectorAll('button').length > 12) break;
-      current = current.parentElement;
-    }
-    return { toolbar: best || copyButton.parentElement, templateButton: copyButton, article };
+  function messageContainer(assistantNode) {
+    return assistantNode.closest('article, [data-testid^="conversation-turn"], [data-message-id]') ||
+      assistantNode.parentElement?.closest('article, [data-testid^="conversation-turn"], [data-message-id]') ||
+      assistantNode.parentElement;
   }
 
-  function createInlineExportButton(templateButton, assistantNode) {
-    let button;
-    if (templateButton) {
-      button = templateButton.cloneNode(true);
-      button.removeAttribute('id');
-      Array.from(button.attributes).forEach(attr => {
-        if (attr.name.startsWith('data-testid') || attr.name === 'data-state') button.removeAttribute(attr.name);
-      });
-      button.innerHTML = exportIconSvg(18);
-    } else {
-      button = document.createElement('button');
-      button.type = 'button';
-      button.innerHTML = exportIconSvg(18);
+  function actionLabel(button) {
+    return normalizeText([
+      button.getAttribute('aria-label') || '',
+      button.getAttribute('title') || '',
+      button.getAttribute('data-testid') || '',
+      button.innerText || ''
+    ].join(' ')).toLowerCase();
+  }
+
+  function findActionToolbar(assistantNode) {
+    const container = messageContainer(assistantNode);
+    if (!container) return null;
+
+    const buttons = Array.from(container.querySelectorAll('button')).filter(button =>
+      !button.closest('[data-cgx-ui]') && !button.classList.contains(EXPORT_BUTTON_CLASS)
+    );
+    if (!buttons.length) return null;
+
+    const known = buttons.find(button => /copy|read aloud|good response|bad response|regenerate|retry|more/.test(actionLabel(button)));
+    const seeds = known ? [known, ...buttons] : buttons;
+    let best = null;
+    let bestScore = -Infinity;
+
+    for (const seed of seeds) {
+      let current = seed.parentElement;
+      let depth = 0;
+      while (current && current !== container && depth < 5) {
+        const directButtons = Array.from(current.querySelectorAll(':scope > button, :scope > div > button')).filter(button => !button.closest('[data-cgx-ui]'));
+        const allButtons = Array.from(current.querySelectorAll('button')).filter(button => !button.closest('[data-cgx-ui]'));
+        const count = directButtons.length || allButtons.length;
+        if (count >= 1 && count <= 12) {
+          const rect = current.getBoundingClientRect();
+          const answerRect = assistantNode.getBoundingClientRect();
+          let score = 20 - depth;
+          if (known && current.contains(known)) score += 40;
+          if (rect.top >= answerRect.top) score += 10;
+          if (count >= 2 && count <= 8) score += 10;
+          if (score > bestScore) { best = current; bestScore = score; }
+        }
+        current = current.parentElement;
+        depth += 1;
+      }
     }
-    button.classList.add(EXPORT_BUTTON_CLASS);
-    button.setAttribute('data-cgx-ui', 'true');
-    button.setAttribute('aria-label', 'Export this question and answer');
-    button.setAttribute('title', 'Export this question and answer');
+    return best ? { toolbar: best, container } : null;
+  }
+
+  function createOwnedButton(className, label, iconSize, withText = false) {
+    const button = document.createElement('button');
     button.type = 'button';
+    button.className = className;
+    button.setAttribute('data-cgx-ui', 'true');
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
+    button.setAttribute('aria-disabled', 'false');
+    button.disabled = false;
+    button.tabIndex = 0;
+    button.innerHTML = exportIconSvg(iconSize) + (withText ? '<span class="cgx-thread-label">Export</span>' : '');
+    return button;
+  }
+
+  function createInlineExportButton(assistantNode) {
+    const button = createOwnedButton(EXPORT_BUTTON_CLASS, 'Export this question and answer', 18, false);
+    button.__cgxAssistantNode = assistantNode;
     button.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
@@ -282,43 +325,56 @@
     return button;
   }
 
+  function ensureFallbackRow(container, assistantNode) {
+    let row = container.querySelector(':scope > .cgx-fallback-actions, .cgx-fallback-actions[data-cgx-answer-actions]');
+    if (!row) {
+      row = document.createElement('div');
+      row.className = 'cgx-fallback-actions';
+      row.setAttribute('data-cgx-ui', 'true');
+      row.setAttribute('data-cgx-answer-actions', 'true');
+      const body = findMessageBody(assistantNode);
+      const placement = body?.parentElement && container.contains(body.parentElement) ? body.parentElement : assistantNode;
+      if (placement?.parentElement) placement.insertAdjacentElement('afterend', row);
+      else container.appendChild(row);
+    }
+    return row;
+  }
+
   function decorateAnswers() {
     document.querySelectorAll(ASSISTANT_SELECTOR).forEach(assistantNode => {
-      if (assistantNode.dataset.cgxExportDecorated === '1') return;
+      const container = messageContainer(assistantNode);
+      if (!container) return;
+
+      let existing = Array.from(container.querySelectorAll('.' + EXPORT_BUTTON_CLASS)).find(button => button.__cgxAssistantNode === assistantNode);
+      container.querySelectorAll('.' + EXPORT_BUTTON_CLASS).forEach(button => {
+        if (button !== existing && button.__cgxAssistantNode !== assistantNode) button.remove();
+      });
 
       const found = findActionToolbar(assistantNode);
-      if (found?.toolbar) {
-        if (!found.toolbar.querySelector(`.${EXPORT_BUTTON_CLASS}`)) {
-          found.toolbar.appendChild(createInlineExportButton(found.templateButton, assistantNode));
-        }
-        assistantNode.dataset.cgxExportDecorated = '1';
-        return;
-      }
+      if (!existing) existing = createInlineExportButton(assistantNode);
 
-      // Fallback: create a small action row immediately below the assistant message.
-      const container = assistantNode.closest('article') || assistantNode.parentElement;
-      if (container && !container.querySelector(`:scope > .cgx-fallback-actions`)) {
-        const fallback = document.createElement('div');
-        fallback.className = 'cgx-fallback-actions';
-        fallback.setAttribute('data-cgx-ui', 'true');
-        fallback.appendChild(createInlineExportButton(null, assistantNode));
-        container.appendChild(fallback);
-        assistantNode.dataset.cgxExportDecorated = '1';
+      if (found?.toolbar) {
+        if (existing.parentElement !== found.toolbar) found.toolbar.appendChild(existing);
+        container.querySelectorAll('.cgx-fallback-actions[data-cgx-answer-actions]').forEach(row => { if (!row.children.length) row.remove(); });
+      } else {
+        const fallback = ensureFallbackRow(container, assistantNode);
+        if (existing.parentElement !== fallback) fallback.appendChild(existing);
       }
     });
   }
 
   function findShareButton() {
     const directSelectors = [
+      '[data-testid="share-chat-button"]',
       'button[data-testid="share-chat-button"]',
-      '[data-testid="share-chat-button"] button',
       'button[aria-label="Share"]',
       'button[aria-label*="Share conversation" i]',
       'button[title="Share"]'
     ];
     for (const selector of directSelectors) {
       const candidate = document.querySelector(selector);
-      if (candidate && visible(candidate) && !candidate.closest('article')) return candidate;
+      const button = candidate?.matches?.('button') ? candidate : candidate?.querySelector?.('button');
+      if (button && visible(button) && !button.closest('article')) return button;
     }
 
     let best = null;
@@ -326,16 +382,12 @@
     for (const button of document.querySelectorAll('button')) {
       if (!visible(button) || button.closest('article') || button.id === THREAD_BUTTON_ID || button.closest('[data-cgx-ui]')) continue;
       const rect = button.getBoundingClientRect();
-      if (rect.top > 220) continue;
-      const label = `${button.getAttribute('aria-label') || ''} ${button.getAttribute('title') || ''}`.trim();
-      const text = normalizeText(button.innerText || '');
-      const combined = `${label} ${text}`.toLowerCase();
+      if (rect.top > 180) continue;
+      const combined = actionLabel(button);
       if (!combined.includes('share')) continue;
-      let score = 10;
-      if (/^share$/i.test(text)) score += 30;
-      if (/^share$/i.test(label)) score += 25;
-      if (rect.top < 120) score += 15;
-      if (rect.left > innerWidth * 0.55) score += 10;
+      let score = 20;
+      if (rect.top < 100) score += 20;
+      if (rect.right > innerWidth * 0.65) score += 15;
       if (score > bestScore) { best = button; bestScore = score; }
     }
     return best;
@@ -348,32 +400,24 @@
       const rect = element.getBoundingClientRect();
       if (rect.top > 140 || rect.bottom > 240 || rect.width < 240) continue;
       const buttons = Array.from(element.querySelectorAll('button')).filter(button => visible(button) && !button.closest('article') && !button.closest('[data-cgx-ui]'));
-      if (!buttons.length || buttons.length > 12) continue;
+      if (!buttons.length || buttons.length > 16) continue;
       const right = Math.max(...buttons.map(button => button.getBoundingClientRect().right));
-      candidates.push({ element, template: buttons[buttons.length - 1], score: right + (rect.top < 90 ? 300 : 0) });
+      candidates.push({ element, score: right + (rect.top < 90 ? 300 : 0) });
     }
     candidates.sort((a, b) => b.score - a.score);
     return candidates[0] || null;
   }
-  function createThreadExportButton(shareButton) {
-    let button;
-    if (shareButton) {
-      button = shareButton.cloneNode(true);
-      button.removeAttribute('id');
-      Array.from(button.attributes).forEach(attr => {
-        if (attr.name.startsWith('data-testid') || attr.name === 'data-state') button.removeAttribute(attr.name);
-      });
-      button.innerHTML = `${exportIconSvg(17)}<span class="cgx-thread-label">Export</span>`;
-    } else {
-      button = document.createElement('button');
-      button.innerHTML = `${exportIconSvg(17)}<span>Export</span>`;
-    }
+
+  function sharePlacementUnit(shareButton) {
+    if (!shareButton) return null;
+    const testIdWrapper = shareButton.closest('[data-testid="share-chat-button"]');
+    if (testIdWrapper && testIdWrapper !== shareButton && testIdWrapper.parentElement) return testIdWrapper;
+    return shareButton;
+  }
+
+  function createThreadExportButton() {
+    const button = createOwnedButton('cgx-thread-export-button', 'Export entire conversation', 17, true);
     button.id = THREAD_BUTTON_ID;
-    button.classList.add('cgx-thread-export-button');
-    button.setAttribute('data-cgx-ui', 'true');
-    button.setAttribute('aria-label', 'Export entire conversation');
-    button.setAttribute('title', 'Export entire conversation');
-    button.type = 'button';
     button.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
@@ -383,20 +427,21 @@
   }
 
   function decorateThreadHeader() {
-    const existing = document.getElementById(THREAD_BUTTON_ID);
+    let button = document.getElementById(THREAD_BUTTON_ID);
     const shareButton = findShareButton();
-    if (shareButton?.parentElement) {
-      if (existing) {
-        if (existing.parentElement !== shareButton.parentElement || existing.nextElementSibling !== shareButton) shareButton.insertAdjacentElement('beforebegin', existing);
+    if (!button) button = createThreadExportButton();
+
+    if (shareButton) {
+      const unit = sharePlacementUnit(shareButton);
+      if (unit?.parentElement) {
+        if (button.parentElement !== unit.parentElement || button.nextElementSibling !== unit) unit.parentElement.insertBefore(button, unit);
         return;
       }
-      shareButton.insertAdjacentElement('beforebegin', createThreadExportButton(shareButton));
-      return;
     }
-    if (existing) return;
+
+    if (button.isConnected) return;
     const fallback = findHeaderActionFallback();
-    if (!fallback) return;
-    fallback.element.appendChild(createThreadExportButton(fallback.template));
+    if (fallback) fallback.element.appendChild(button);
   }
 
   function closeMenu() {
