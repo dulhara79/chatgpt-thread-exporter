@@ -1,20 +1,22 @@
-# ChatGPT Thread Exporter — V0.3
+# ChatGPT Thread Exporter — V0.3.1
 
 A local-only Chrome Manifest V3 extension for exporting ChatGPT conversations to professional PDF, Microsoft Word (`.docx`), and Markdown.
 
-## V0.3 highlights
+## V0.3.1 highlights
 
 - Export one Q&A or the complete rendered conversation.
-- Conversation-level **Export** is inserted immediately to the **left of Share** when Share is discoverable, with a deterministic same-header fallback.
+- Every assistant answer gets a self-healing download/export control. If ChatGPT React re-renders an action row and removes the control, the extension inserts it again.
+- Conversation-level **Export** is inserted immediately to the **left of Share** when Share is discoverable, with a deterministic same-header fallback. The control is extension-owned rather than cloned from ChatGPT, so disabled/hidden Share state cannot block it.
 - No visible **Scope / Source / Exported** metadata table in generated documents.
 - Ordered lists preserve their actual sequence and start values instead of becoming `1, 1, 1...`.
 - Word uses native OOXML numbering definitions.
 - Meaningful images are retained while favicons, avatars, toolbar icons, and tiny decorative assets are filtered.
+- Content-bearing SVG diagrams are preserved. PDF renders them directly; Word rasterizes rendered SVG diagrams locally before embedding them.
 - PDF renders meaningful images at document-safe sizes; Word embeds fetchable PNG/JPEG/GIF/WebP images and degrades to a useful link when embedding is unavailable.
 - Common KaTeX/MathJax structures are recovered as TeX where available. Markdown keeps TeX notation, PDF presents readable math, and Word keeps a readable equation fallback.
 - Unicode-first export supports Sinhala, English, Tamil, Korean, mathematical symbols, combining text, and emoji subject to fonts installed on the user's system.
 - **A4 is the default** page size; **Letter** and **Legal** are selectable for PDF and Word.
-- PDF, Word, and Markdown share a restrained professional information hierarchy.
+- PDF, Word, and Markdown share a restrained professional information hierarchy with 10.5 pt body text, 23 pt document titles, navy/slate headings, subtle rules, Aptos/Segoe UI/Nirmala UI fallbacks, Cascadia Mono/Consolas code, and print-safe spacing.
 
 ## Document design
 
@@ -102,4 +104,4 @@ The approved V0.3 design is documented at:
 
 ## Version
 
-V0.3.0
+V0.3.1
