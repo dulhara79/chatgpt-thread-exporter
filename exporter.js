@@ -304,8 +304,9 @@
 
   // ---------------- Print-ready PDF HTML ----------------
 
-  function buildPrintHtml(data, turns) {
+  function buildPrintHtml(data, turns, options = {}) {
     const title = documentTitle(data, turns);
+    const pageSize = normalizePageSize(options.pageSize);
     const sections = [];
 
     turns.forEach((turn, idx) => {
@@ -325,9 +326,6 @@
       sections.push('</section>');
     });
 
-    const scope = turns.length === 1 ? 'Single question and answer' : `Complete conversation · ${turns.length} Q&A turns`;
-    const exported = formatDate(new Date());
-
     return `<!doctype html>
 <html lang="en">
 <head>
@@ -336,7 +334,7 @@
 <title>${escapeHtml(title)}</title>
 <style>
 @page {
-  size: A4;
+  size: ${pageSize};
   margin: 19mm 17mm 19mm 17mm;
   @bottom-left { content: "${APP_NAME}"; font: 8.5pt Arial, sans-serif; color: #6b7280; }
   @bottom-right { content: "Page " counter(page) " of " counter(pages); font: 8.5pt Arial, sans-serif; color: #6b7280; }
@@ -346,24 +344,24 @@ html, body { padding: 0; margin: 0; }
 body {
   color: #111827;
   background: #fff;
-  font-family: "Aptos", "Segoe UI", Arial, "Noto Sans", "Noto Sans Sinhala", sans-serif;
+  font-family: "Aptos", "Segoe UI", "Nirmala UI", "Noto Sans Sinhala", "Noto Sans Tamil", "Malgun Gothic", "Segoe UI Emoji", "Apple Color Emoji", Arial, sans-serif;
   font-size: 10.5pt;
   line-height: 1.55;
   -webkit-print-color-adjust: exact;
   print-color-adjust: exact;
 }
 .document { max-width: 178mm; margin: 0 auto; }
-.document-header { margin-bottom: 11mm; padding-bottom: 5mm; border-bottom: 1.2pt solid #111827; }
+.document-header { margin-bottom: 11mm; padding-bottom: 5mm; border-bottom: 1.2pt solid #17365D; }
 .kicker { font-size: 8.5pt; font-weight: 700; letter-spacing: .12em; color: #4b5563; margin-bottom: 3mm; }
-h1 { font-size: 22pt; line-height: 1.18; letter-spacing: -.02em; margin: 0 0 5mm; font-weight: 700; color: #111827; }
+h1 { font-size: 22pt; line-height: 1.18; letter-spacing: -.02em; margin: 0; font-weight: 700; color: #17365D; }
 .meta-grid { width: 100%; border-collapse: collapse; font-size: 8.8pt; color: #4b5563; }
 .meta-grid th { text-align: left; width: 23mm; padding: 1.1mm 3mm 1.1mm 0; color: #111827; font-weight: 650; vertical-align: top; }
 .meta-grid td { padding: 1.1mm 0; overflow-wrap: anywhere; vertical-align: top; }
 .qa-section { padding: 0 0 8mm; margin: 0 0 9mm; border-bottom: .6pt solid #d1d5db; break-inside: auto; }
 .qa-section:last-child { border-bottom: 0; margin-bottom: 0; }
 .section-label, .answer-header { font-size: 8.5pt; font-weight: 750; letter-spacing: .10em; color: #374151; margin: 0 0 3mm; }
-.answer-header { margin-top: 7mm; color: #065f46; }
-.question-content { background: #f8fafc; border-left: 3pt solid #64748b; padding: 4mm 4.5mm; margin-bottom: 5mm; }
+.answer-header { margin-top: 7mm; color: #17365D; }
+.question-content { background: #F5F8FC; border-left: 3pt solid #17365D; padding: 4mm 4.5mm; margin-bottom: 5mm; }
 .answer-content { padding-left: .5mm; }
 h3 { font-size: 14pt; margin: 6mm 0 2.5mm; line-height: 1.25; color: #111827; }
 h4 { font-size: 12pt; margin: 5mm 0 2mm; line-height: 1.3; color: #111827; }
@@ -381,9 +379,11 @@ a { color: #1d4ed8; text-decoration: underline; text-underline-offset: 1px; }
 .table-wrap { margin: 4mm 0; overflow: hidden; }
 table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 9pt; }
 th, td { border: .55pt solid #cbd5e1; padding: 2.1mm 2.4mm; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
-th { background: #f1f5f9; font-weight: 700; color: #111827; }
-.document-end { margin-top: 10mm; padding-top: 3mm; border-top: .6pt solid #d1d5db; font-size: 8pt; color: #6b7280; }
-@media print { .document-end { display: none; } }
+th { background: #EEF3F8; font-weight: 700; color: #17365D; }
+.media { margin: 4mm 0; text-align: center; break-inside: avoid; }
+.media img { display: block; max-width: 100%; max-height: 235mm; width: auto; height: auto; object-fit: contain; margin: 0 auto; }
+.math-inline { font-family: "Cambria Math", "Times New Roman", serif; }
+.math-display { margin: 4mm 0; padding: 3mm; text-align: center; white-space: pre-wrap; overflow-wrap: anywhere; font-family: "Cambria Math", "Times New Roman", serif; background: #FAFBFC; border: .5pt solid #D9E2EC; }
 </style>
 </head>
 <body>
@@ -391,21 +391,15 @@ th { background: #f1f5f9; font-weight: 700; color: #111827; }
   <header class="document-header">
     <div class="kicker">CHATGPT CONVERSATION EXPORT</div>
     <h1>${escapeHtml(title)}</h1>
-    <table class="meta-grid" role="presentation">
-      <tr><th>Scope</th><td>${escapeHtml(scope)}</td></tr>
-      <tr><th>Source</th><td>${escapeHtml(data.url || '')}</td></tr>
-      <tr><th>Exported</th><td>${escapeHtml(exported)}</td></tr>
-    </table>
   </header>
   ${sections.join('')}
-  <div class="document-end">Generated locally by ${APP_NAME}. Conversation content is reproduced from the currently open ChatGPT thread.</div>
 </main>
 </body>
 </html>`;
   }
 
-  function exportPdf(data, turns) {
-    const html = buildPrintHtml(data, turns);
+  function exportPdf(data, turns, options = {}) {
+    const html = buildPrintHtml(data, turns, options);
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const win = window.open(url, '_blank');
