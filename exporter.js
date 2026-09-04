@@ -423,7 +423,7 @@ th { background: #f1f5f9; font-weight: 700; color: #111827; }
     crcTable ||= makeCrcTable();
     let c = 0xFFFFFFFF;
     for (const b of bytes) c = crcTable[(c ^ b) & 0xFF] ^ (c >>> 8);
-    return (c ^ 0xFFFFFFF) >>> 0;
+    return (c ^ 0xFFFFFFFF) >>> 0;
   }
 
   const u16 = n => new Uint8Array([n & 255, (n >>> 8) & 255]);
@@ -527,7 +527,7 @@ th { background: #f1f5f9; font-weight: 700; color: #111827; }
         if (token.type === 'italic') return wordRun(token.text, { ...base, italic: true });
         if (token.type === 'code') return wordRun(token.text, { ...base, code: true });
         if (token.type === 'link' && token.href) {
-          const id = `rid${hyperlinkId++}`;
+          const id = `rId${hyperlinkId++}`;
           hyperlinkRels.push(`<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${xmlEscape(token.href)}" TargetMode="External"/>`);
           return `<w:hyperlink r:id="${id}">${wordRun(token.text, { ...base, color: '0563C1', underline: true })}</w:hyperlink>`;
         }
@@ -536,103 +536,207 @@ th { background: #f1f5f9; font-weight: 700; color: #111827; }
     }
 
     function paragraph(content = '', opts = {}) {
-      const pPrHHÂˆÜËœİ[HÈÎœİ[HÎ˜[H‰ÛÜËœİ[_H‹Ï˜ˆ	ÉËˆÜË˜[YÛˆÈÎš˜ÈÎ˜[H‰ÛÜË˜[YÛŸH‹Ï˜ˆ	ÉËˆÜË˜™Y›Ü™HÜË˜Y\ˆÈÎœÜXÚ[™ÈÎ˜™Y›Ü™OH‰ÛÜË˜™Y›Ü™HHˆÎ˜Y\H‰ÛÜË˜Y\ˆHˆÎ›[™OH‰ÛÜË›[™HÌHˆÎ›[™T[OH˜]]È‹Ï˜ˆ	ÉËˆÜËšÙY\™^È	ÏÎšÙY\™^Ï‰Èˆ	ÉËˆÜËš[™[ÈÎš[™Î›YH‰ÛÜËš[™[H‹Ï˜ˆ	ÉËˆÜË˜›Ü™\“YÈÎœ™Î›YÎ˜[HœÚ[™ÛHˆÎœŞH‰ÛÜË˜›Ü™\“YœÚ^™HNHˆÎœÜXÙOHˆÎ˜ÛÛÜH‰ÛÜË˜›Ü™\“Y˜ÛÛÜˆ	ÍÍ‰ßH‹ÏİÎœ™˜ˆ	ÉËˆÜËœÚY[™ÈÈÎœÚÎ˜[H˜ÛX\ˆˆÎ˜ÛÛÜH˜]]ÈˆÎ™š[H‰ÛÜËœÚY[™ßH‹Ï˜ˆ	ÉÂˆKš›Ú[Š	ÉÊNÂˆÛÛœİ›ÙHHÜËœ˜]ÈÈÛÛ[ˆ[›[™UÛÜ™[
-ÛÛ[ÜËœ[ˆßJNÂˆ™]\›ˆÎœ‰ÜˆÈÎœ‰ÜŸOİÎœ˜ˆ	ÉßIØ›Ù_OİÎœ˜ÂˆB‚ˆ[˜İ[ÛˆÛÙT\˜YÜ˜\
-^[™ÊHÂˆÛÛœİX™[H[™ÈÈ\˜YÜ˜\
-[™ËÕ\\Ø\ÙJ
-KÈİ[Nˆ	ĞÛÙSX™[	ËÙY\™^ˆYHJHˆ	ÉÎÂˆÛÛœİÛÙHH\˜YÜ˜\
-	ÉËÂˆ˜]ÎˆYKÚY[™Îˆ	ÑŒÑ‰Ë›Ü™\“YˆÈÛÛÜˆ	ĞĞ‘QLIËÚ^™NˆKˆ™Y›Ü™NˆY\ˆMŒˆJNÂˆÛÛœİ[œÈHİš[™Ê^	ÉÊKœÜ]
-	×‰ÊK›X\
+      const pPr = [
+        opts.style ? `<w:pStyle w:val="${opts.style}"/>` : '',
+        opts.align ? `<w:jc w:val="${opts.align}"/>` : '',
+        opts.before || opts.after ? `<w:spacing w:before="${opts.before || 0}" w:after="${opts.after || 0}" w:line="${opts.line || 300}" w:lineRule="auto"/>` : '',
+        opts.keepNext ? '<w:keepNext/>' : '',
+        opts.indent ? `<w:ind w:left="${opts.indent}"/>` : '',
+        opts.borderLeft ? `<w:pBdr><w:left w:val="single" w:sz="${opts.borderLeft.size || 18}" w:space="8" w:color="${opts.borderLeft.color || '64748B'}"/></w:pBdr>` : '',
+        opts.shading ? `<w:shd w:val="clear" w:color="auto" w:fill="${opts.shading}"/>` : ''
+      ].join('');
+      const body = opts.raw ? content : inlineWordXml(content, opts.run || {});
+      return `<w:p>${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${body}</w:p>`;
+    }
 
-[™KY
-HOˆ	ÚYÈ	ÏÎ˜œ‹Ï‰Èˆ	ÉßIİÛÜ™[Š[™H	È	ËÈÛÙNˆYKÚ^™NˆNJ_X
-Kš›Ú[Š	ÉÊNÂˆ™]\›ˆX™[
-ÈÛÙKœ™\XÙJ	ÏİÎœ‰Ë	Ü[œßOİÎœ˜
-NÂˆB‚ˆ[˜İ[ÛˆÛÜ™X›J›İÜËÜÈHßJHÂˆYˆ
-\›İÜÏË›[™İ
-H™]\›ˆ	ÉÎÂˆÛÛœİÛÛÈHX]›X^
-‹‹œ›İÜË›X\
-ˆOˆ‹›[™İ
-JNÂˆÛÛœİİ[ÚYHÜËÚYLÍŒÂˆÛÛœİÛÛÚYHX]™›ÛÜŠİ[ÚYÈX]›X^
-KÛÛÊJNÂˆÛÛœİÜšYH\œ˜^JÛÛÊK™š[
-Î™ÜšYÛÛÎÏH‰ØÛÛÚYH‹Ï˜
-Kš›Ú[Š	ÉÊNÂˆÛÛœİX›T›İÜÈH›İÜË›X\
+    function codeParagraph(text, lang) {
+      const label = lang ? paragraph(lang.toUpperCase(), { style: 'CodeLabel', keepNext: true }) : '';
+      const code = paragraph('', {
+        raw: true, shading: 'F3F4F6', borderLeft: { color: 'CBD5E1', size: 8 },
+        before: 0, after: 160
+      });
+      const runs = String(text || '').split('\n').map((line, idx) => `${idx ? '<w:br/>' : ''}${wordRun(line || ' ', { code: true, size: 18 })}`).join('');
+      return label + code.replace('</w:p>', `${runs}</w:p>`);
+    }
 
-›İË’Y
-HOˆÂˆÛÛœİÙ[ÈHË‹‹œ›İË‹‹\œ˜^JX]›X^
-ÛÛÈH›İË›[™İ
-JK™š[
-	ÉÊWNÂˆ™]\›ˆÎ‰ØÙ[Ë›X\
-Ù[OˆÎÏÎÔÎÕÈÎÏH‰ØÛÛÚYHˆÎ\OH™H‹Ï‰Ü’YOOH	‰ˆÜËšXY\ˆOOH˜[ÙHÈ	ÏÎœÚÎ˜[H˜ÛX\ˆˆÎ˜ÛÛÜH˜]]ÈˆÎ™š[H‘ŒQQH‹Ï‰Èˆ	ÉßOÎÓX\ÎÜÎÏHˆÎ\OH™H‹ÏÎ›YÎÏHŒLˆÎ\OH™H‹ÏÎ˜›İÛHÎÏHˆÎ\OH™H‹ÏÎœšYÚÎÏHŒLˆÎ\OH™H‹ÏİÎÓX\İÎÔ‰Ü\˜YÜ˜\
-İš[™ÊÙ[
-KÈY\ˆ[ˆ’YOOH	‰ˆÜËšXY\ˆOOH˜[ÙHÈÈ›ÛˆYHHˆßHJ_OİÎÏ˜
-Kš›Ú[Š	ÉÊ_OİÎ˜ÂˆJKš›Ú[Š	ÉÊNÂˆ™]\›ˆÎ›Î›Î›ÈÎÏH‰İİ[ÚYHˆÎ\OH™H‹ÏÎ››Ü™\œÏÎÜÎ˜[HœÚ[™ÛHˆÎœŞHˆÎ˜ÛÛÜHĞ‘QLH‹ÏÎ›YÎ˜[HœÚ[™ÛHˆÎœŞHˆÎ˜ÛÛÜHĞ‘QLH‹ÏÎ˜›İÛHÎ˜[HœÚ[™ÛHˆÎœŞHˆÎ˜ÛÛÜHĞ‘QLH‹ÏÎœšYÚÎ˜[HœÚ[™ÛHˆÎœŞHˆÎ˜ÛÛÜHĞ‘QLH‹ÏÎš[œÚYRÎ˜[HœÚ[™ÛHˆÎœŞHˆÎ˜ÛÛÜHĞ‘QLH‹ÏÎš[œÚYUˆÎ˜[HœÚ[™ÛHˆÎœŞHˆÎ˜ÛÛÜHĞ‘QLH‹ÏİÎ››Ü™\œÏİÎ›Î›ÜšY‰ÙÜšYOİÎ›ÜšY‰İX›T›İÜßOİÎ›˜ÂˆB‚ˆ[˜İ[ÛˆX\šÙİÛ•ÕÛÜ™[
-X\šÙİÛŠHÂˆÛÛœİ\ÈH×NÂˆ›Üˆ
-ÛÛœİ›ØÚÈÙˆ\œÙSX\šÙİÛ›ØÚÜÊX\šÙİÛŠJHÂˆYˆ
-›ØÚË\HOOH	Ø›[šÉÊHÛÛ[YNÂˆYˆ
-›ØÚË\HOOH	ÚXY[™ÉÊHÂˆÛÛœİİ[HH›ØÚË›]™[HHÈ	ÒXY[™Ì‰Èˆ›ØÚË›]™[OOHˆÈ	ÒXY[™ÌÉÈˆ	ÒXY[™Í	ÎÂˆ\Ëœ\Ú
-\˜YÜ˜\
-›ØÚË^Èİ[KÙY\™^ˆYHJJNÂˆH[ÙHYˆ
-›ØÚË\HOOH	İ^	ÊHÂˆ\Ëœ\Ú
-\˜YÜ˜\
-›ØÚË^ÈY\ˆML[™NˆÌJJNÂˆH[ÙHYˆ
-›ØÚË\HOOH	Ü][İIÊHÂˆ\Ëœ\Ú
-\˜YÜ˜\
-›ØÚË^ÈY\ˆMŒ[™[ˆÍŒÚY[™Îˆ	ÑQÉË›Ü™\“YˆÈÛÛÜˆ	ÎMLĞ	ËÚ^™NˆMˆHJJNÂˆH[ÙHYˆ
-›ØÚË\HOOH	Û\İ	ÊHÂˆÛÛœİ™Yš^H›ØÚË›Ü™\™YÈ	Ø›ØÚË›X\šÙ\ˆ	ÌIßKˆˆ	ø (ˆ	ÎÂˆ\Ëœ\Ú
-\˜YÜ˜\
-	ÉËÈ˜]ÎˆYKY\ˆÌ[™[ˆÍŒJBˆœ™\XÙJ	ÏİÎœ‰Ë	İÛÜ™[Š™Yš^È›Ûˆ˜[ÙHJ_IÚ[›[™UÛÜ™[
-›ØÚË^
-_OİÎœ˜
-JNÂˆH[ÙHYˆ
-›ØÚË\HOOH	Ü[IÊHÂˆ\Ëœ\Ú
-	ÏÎœÎœÎœ™Î˜›İÛHÎ˜[HœÚ[™ÛHˆÎœŞHˆÎœÜXÙOHˆˆÎ˜ÛÛÜH‘QQˆ‹ÏİÎœ™ÎœÜXÚ[™ÈÎ˜™Y›Ü™OHŒLˆÎ˜Y\HŒL‹ÏİÎœİÎœ‰ÊNÂˆH[ÙHYˆ
-›ØÚË\HOOH	ØÛÙIÊHÂˆ\Ëœ\Ú
-ÛÙT\˜YÜ˜\
-›ØÚË^›ØÚË›[™ÊJNÂˆH[ÙHYˆ
-›ØÚË\HOOH	İX›IÊHÂˆ\Ëœ\Ú
-ÛÜ™X›J›ØÚËœ›İÜÊJNÂˆ\Ëœ\Ú
-\˜YÜ˜\
-	È	ËÈY\ˆJJNÂˆBˆBˆ™]\›ˆ\Ëš›Ú[Š	ÉÊNÂˆB‚ˆ[˜İ[Ûˆ›ŞYÛÛ[[
-ÛÛ[[
-HÂˆ™]\›ˆÎ›Î›Î›ÈÎÏHLÍŒˆÎ\OH™H‹ÏÎ››Ü™\œÏÎ›YÎ˜[HœÚ[™ÛHˆÎœŞHŒŒˆÎ˜ÛÛÜHÍˆ‹ÏÎÜÎ˜[H›š[‹ÏÎ˜›İÛHÎ˜[H›š[‹ÏÎœšYÚÎ˜[H›š[‹ÏÎš[œÚYRÎ˜[H›š[‹ÏÎš[œÚYUˆÎ˜[H›š[‹ÏİÎ››Ü™\œÏİÎ›Î›ÜšYÎ™ÜšYÛÛÎÏHLÍŒ‹ÏİÎ›ÜšYÎÎÏÎÔÎÕÈÎÏHLÍŒˆÎ\OH™H‹ÏÎœÚÎ˜[H˜ÛX\ˆˆÎ˜ÛÛÜH˜]]ÈˆÎ™š[H‘QÈ‹ÏÎÓX\ÎÜÎÏHŒMLˆÎ\OH™H‹ÏÎ›YÎÏHŒNˆÎ\OH™H‹ÏÎ˜›İÛHÎÏHŒLŒˆÎ\OH™H‹ÏÎœšYÚÎÏHŒNˆÎ\OH™H‹ÏİÎÓX\İÎÔ‰ØÛÛ[[\˜YÜ˜\
-	È	Ê_OİÎÏİÎİÎ›˜ÂˆB‚ˆÛÛœİ›ÙHH×NÂˆ›ÙKœ\Ú
-\˜YÜ˜\
-	ĞÒUÔÓÓ•‘T”ĞUSÓˆVÔ•	ËÈİ[Nˆ	ÒÚXÚÙ\‰ËÙY\™^ˆYHJJNÂˆ›ÙKœ\Ú
-\˜YÜ˜\
-]KÈİ[Nˆ	Õ]IËÙY\™^ˆYHJJNÂ‚ˆÛÛœİØÛÜHH\›œË›[™İOOHHÈ	ÔÚ[™ÛH]Y\İ[Ûˆ[™[œİÙ\‰ÈˆÛÛ\]HÛÛ™\œØ][Ûˆ0­È	İ\›œË›[™İHIH\›œØÂˆ›ÙKœ\Ú
-ÛÜ™X›JÂˆÉÔØÛÜIËØÛÜWKˆÉÔÛİ\˜ÙIË]K\›	É×KˆÉÑ^ÜY	Ë›Ü›X]]J™]È]J
-JWBˆKÈXY\ˆ˜[ÙHJJNÂˆ›ÙKœ\Ú
-\˜YÜ˜\
-	È	ËÈY\ˆLŒJJNÂ‚ˆ\›œË™›Ü‘XXÚ
+    function wordTable(rows, opts = {}) {
+      if (!rows?.length) return '';
+      const cols = Math.max(...rows.map(r => r.length));
+      const totalWidth = opts.width || 9360;
+      const colWidth = Math.floor(totalWidth / Math.max(1, cols));
+      const grid = Array(cols).fill(`<w:gridCol w:w="${colWidth}"/>`).join('');
+      const tableRows = rows.map((row, rIdx) => {
+        const cells = [...row, ...Array(Math.max(0, cols - row.length)).fill('')];
+        return `<w:tr>${cells.map(cell => `<w:tc><w:tcPr><w:tcW w:w="${colWidth}" w:type="dxa"/>${rIdx === 0 && opts.header !== false ? '<w:shd w:val="clear" w:color="auto" w:fill="F1F5F9"/>' : ''}<w:tcMar><w:top w:w="80" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tcMar></w:tcPr>${paragraph(String(cell), { after: 0, run: rIdx === 0 && opts.header !== false ? { bold: true } : {} })}</w:tc>`).join('')}</w:tr>`;
+      }).join('');
+      return `<w:tbl><w:tblPr><w:tblW w:w="${totalWidth}" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="4" w:color="CBD5E1"/><w:left w:val="single" w:sz="4" w:color="CBD5E1"/><w:bottom w:val="single" w:sz="4" w:color="CBD5E1"/><w:right w:val="single" w:sz="4" w:color="CBD5E1"/><w:insideH w:val="single" w:sz="4" w:color="CBD5E1"/><w:insideV w:val="single" w:sz="4" w:color="CBD5E1"/></w:tblBorders></w:tblPr><w:tblGrid>${grid}</w:tblGrid>${tableRows}</w:tbl>`;
+    }
 
-\›‹Y
-HOˆÂˆÛÛœİˆH[X™\‹š\Ñš[š]J\›‹š[™^
-HÈ\›‹š[™^
-ÈHˆY
-ÈNÂˆ›ÙKœ\Ú
-\˜YÜ˜\
-UQTÕSÓˆ	Ôİš[™ÊŠKœYİ\
-‹	Ì	Ê_XÈİ[Nˆ	ÔÙXİ[Û“X™[	ËÙY\™^ˆYHJJNÂˆ›ÙKœ\Ú
-›ŞYÛÛ[[
-X\šÙİÛ•ÕÛÜ™[
-\›‹œ]Y\İ[Û‹›X\šÙİÛˆ\›‹œ]Y\İ[Û‹^
-JJNÂ‚ˆÛÛœİ[œİÙ\œÈH
-\›‹˜[œİÙ\œÈ×JK™š[\ŠHOˆK^K›X\šÙİÛŠNÂˆ[œİÙ\œË™›Ü‘XXÚ
+    function markdownToWordXml(markdown) {
+      const parts = [];
+      for (const block of parseMarkdownBlocks(markdown)) {
+        if (block.type === 'blank') continue;
+        if (block.type === 'heading') {
+          const style = block.level <= 1 ? 'Heading2' : block.level === 2 ? 'Heading3' : 'Heading4';
+          parts.push(paragraph(block.text, { style, keepNext: true }));
+        } else if (block.type === 'text') {
+          parts.push(paragraph(block.text, { after: 150, line: 300 }));
+        } else if (block.type === 'quote') {
+          parts.push(paragraph(block.text, { after: 160, indent: 360, shading: 'F8FAFC', borderLeft: { color: '94A3B8', size: 16 } }));
+        } else if (block.type === 'list') {
+          const prefix = block.ordered ? `${block.marker || '1'}. ` : 'â€¢ ';
+          parts.push(paragraph('', { raw: true, after: 70, indent: 360 })
+            .replace('</w:p>', `${wordRun(prefix, { bold: false })}${inlineWordXml(block.text)}</w:p>`));
+        } else if (block.type === 'rule') {
+          parts.push('<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="4" w:space="6" w:color="D1D5DB"/></w:pBdr><w:spacing w:before="100" w:after="100"/></w:pPr></w:p>');
+        } else if (block.type === 'code') {
+          parts.push(codeParagraph(block.text, block.lang));
+        } else if (block.type === 'table') {
+          parts.push(wordTable(block.rows));
+          parts.push(paragraph(' ', { after: 80 }));
+        }
+      }
+      return parts.join('');
+    }
 
-[œİÙ\‹[œİÙ\’[™^
-HOˆÂˆ›ÙKœ\Ú
-\˜YÜ˜\
-[œİÙ\œË›[™İˆHÈS”ÕÑTˆ	Ôİš[™Ê[œİÙ\’[™^
-ÈJKœYİ\
-‹	Ì	Ê_Xˆ	ĞS”ÕÑT‰ËÈİ[Nˆ	Ğ[œİÙ\“X™[	ËÙY\™^ˆYK™Y›Ü™NˆNJJNÂˆ›ÙKœ\Ú
-X\šÙİÛ•ÕÛÜ™[
-[œİÙ\‹›X\šÙİÛˆ[œİÙ\‹^
-JNÂˆJNÂ‚ˆYˆ
-Y\›œË›[™İHJHÂˆ›ÙKœ\Ú
-	ÏÎœÎœÎœ™Î˜›İÛHÎ˜[HœÚ[™ÛHˆÎœŞHˆÎœÜXÙOHˆÎ˜ÛÛÜH‘QQˆ‹ÏİÎœ™ÎœÜXÚ[™ÈÎ˜™Y›Ü™OHŒMŒˆÎ˜Y\HŒŒŒ‹ÏİÎœİÎœ‰ÊNÂˆBˆJNÂ‚ˆÛÛœİÙXİˆHÎœÙXİ‚ˆÎšXY\”™Y™\™[˜ÙHÎ\OH™Y˜][ˆšYHœ’Yˆ‹Ï‚ˆÎ™›Ûİ\”™Y™\™[˜ÙHÎ\OH™Y˜][ˆšYHœ’YÈ‹Ï‚ˆÎœÔŞˆÎÏHŒLNLˆˆÎšHŒMÎ‹Ï‚ˆÎœÓX\ˆÎÜHŒLÍÈˆÎœšYÚHMˆÎ˜›İÛOHŒLÍÈˆÎ›YHMˆÎšXY\HHˆÎ™›Ûİ\HHˆÎ™İ]\HŒ‹Ï‚ˆİÎœÙXİ˜Â‚ˆÛÛœİØİ[Y[[HŞ[™\œÚ[ÛHŒKŒˆ[˜ÛÙ[™ÏH•U‹Nˆİ[™[Û™OHY\ÈÏ‚Î™Øİ[Y[[œÎÏHš‹ËÜØÚ[X\Ë›Ü[[›Ü›X]Ë›Ü™ËİÛÜ™›ØÙ\ÜÚ[™Û[ÌŒ‹ÛXZ[ˆˆ[œÎœHš‹ËÜØÚ[X\Ë›Ü[[›Ü›X]Ë›Ü™ËÛÙ™šXÙQØİ[Y[ÌŒ‹Ü™[][ÛœÚ\È‚Î˜›ÙO‰Ø›ÙKš›Ú[Š	ÉÊ_IÜÙXİŸOİÎ˜›ÙOİÎ™Øİ[Y[˜Â‚ˆÛÛœİİ[\Ö[HŞ[™\œÚ[ÛHŒKŒˆ[˜ÛÙ[™ÏH•U‹Nˆİ[™[Û™OHY\ÈÏ‚Îœİ[\È[œÎÏHš‹ËÜØÚ[X\Ë›Ü[[›Ü›X]Ë›Ü™ËİÛÜ™›ØÙ\ÜÚ[™Û[ÌŒ‹ÛXZ[ˆ‚ˆÎ™ØÑY˜][ÏÎœ”‘Y˜][Îœ”Îœ‘›ÛÈÎ˜\ØÚZOH\ÜÈˆÎš[œÚOH\ÜÈˆÎ™X\İ\ÚXOH“X[İ[ˆÛİXÈˆÎ˜ÜÏH“š\›X[HRH‹ÏÎœŞˆÎ˜[HŒŒH‹ÏÎœŞÜÈÎ˜[HŒŒH‹ÏÎ›[™ÈÎ˜[H™[‹UTÈ‹ÏİÎœ”İÎœ”‘Y˜][Îœ‘Y˜][ÎœÎœÜXÚ[™ÈÎ˜Y\HŒMˆÎ›[™OHŒÌˆÎ›[™T[OH˜]]È‹ÏİÎœİÎœ‘Y˜][İÎ™ØÑY˜][Ï‚ˆÎœİ[HÎ\OHœ\˜YÜ˜\ˆÎ™Y˜][HŒHˆÎœİ[RYH“›Ü›X[Î›˜[YHÎ˜[H“›Ü›X[‹ÏÎœQ›Ü›X]ÏÎœ”Îœ‘›ÛÈÎ˜\ØÚZOH\ÜÈˆÎš[œÚOH\ÜÈˆÎ™X\İ\ÚXOH“X[İ[ˆÛİXÈˆÎ˜ÜÏH“š\›X[HRH‹ÏÎœŞˆÎ˜[HŒŒH‹ÏÎœŞÜÈÎ˜[HŒŒH‹ÏÎ˜ÛÛÜˆÎ˜[HŒLLNÈ‹ÏİÎœ”İÎœİ[O‚ˆÎœİ[HÎ\OHœ\˜YÜ˜\ˆÎœİ[RYH•]HÎ›˜[YHÎ˜[H•]H‹ÏÎ˜˜\ÙYÛˆÎ˜[H“›Ü›X[‹ÏÎœQ›Ü›X]ÏÎœÎœÜXÚ[™ÈÎ˜™Y›Ü™OHˆÎ˜Y\HŒŒ‹ÏÎšÙY\™^ÏİÎœÎœ”Î˜‹ÏÎœŞˆÎ˜[Hˆ‹ÏÎœŞÜÈÎ˜[Hˆ‹ÏÎ˜ÛÛÜˆÎ˜[HŒLLNÈ‹ÏİÎœ”İÎœİ[O‚ˆÎœİ[HÎ\OHœ\˜YÜ˜\ˆÎœİ[RYH’ÚXÚÙ\ˆÎ›˜[YHÎ˜[H’ÚXÚÙ\ˆ‹ÏÎ˜˜\ÙYÛˆÎ˜[H“›Ü›X[‹ÏÎœÎœÜXÚ[™ÈÎ˜Y\HL‹ÏÎšÙY\™^ÏİÎœÎœ”Î˜‹ÏÎœŞˆÎ˜[HŒMÈ‹ÏÎœŞÜÈÎ˜[HŒMÈ‹ÏÎ˜ÛÛÜˆÎ˜[HMMŒÈ‹ÏÎœÜXÚ[™ÈÎ˜[HŒŒ‹ÏİÎœ”İÎœİ[O‚ˆÎœİ[HÎ\OHœ\˜YÜ˜\ˆÎœİ[RYH”ÙXİ[Û“X™[Î›˜[YHÎ˜[H”ÙXİ[ÛˆX™[‹ÏÎ˜˜\ÙYÛˆÎ˜[H“›Ü›X[‹ÏÎœÎœÜXÚ[™ÈÎ˜™Y›Ü™OHŒMŒˆÎ˜Y\HŒL‹ÏÎšÙY\™^ÏİÎœÎœ”Î˜‹ÏÎœŞˆÎ˜[HŒMÈ‹ÏÎœŞÜÈÎ˜[HŒMÈ‹ÏÎ˜ÛÛÜˆÎ˜[HŒÍÍMLH‹ÏÎœÜXÚ[™ÈÎ˜[HŒMˆ‹ÏİÎœ”İÎœİ[O‚ˆÎœİ[HÎ\OHœ\˜YÜ˜\ˆÎœİ[RYH[œİÙ\“X™[Î›˜[YHÎ˜[H[œİÙ\ˆX™[‹ÏÎ˜˜\ÙYÛˆÎ˜[H“›Ü›X[‹ÏÎœÎœÜXÚ[™ÈÎ˜™Y›Ü™OHŒŒŒˆÎ˜Y\HŒL‹ÏÎšÙY\™^ÏİÎœÎœ”Î˜‹ÏÎœŞˆÎ˜[HŒMÈ‹ÏÎœŞÜÈÎ˜[HŒMÈ‹ÏÎ˜ÛÛÜˆÎ˜[HŒQˆ‹ÏÎœÜXÚ[™ÈÎ˜[HŒMˆ‹ÏİÎœ”İÎœİ[O‚ˆÎœİ[HÎ\OHœ\˜YÜ˜\ˆÎœİ[RYH’XY[™ÌˆÎ›˜[YHÎ˜[H’XY[™Èˆ‹ÏÎ˜˜\ÙYÛˆÎ˜[H“›Ü›X[‹ÏÎœQ›Ü›X]ÏÎœÎœÜXÚ[™ÈÎ˜™Y›Ü™OHŒŒŒˆÎ˜Y\HŒL‹ÏÎšÙY\™^ÏİÎœÎœ”Î˜‹ÏÎœŞˆÎ˜[HŒ‹ÏÎœŞÜÈÎ˜[HŒ‹ÏÎ˜ÛÛÜˆÎ˜[HŒLLNÈ‹ÏİÎœ”İÎœİ[O‚ˆÎœİ[HÎ\OHœ\˜YÜ˜\ˆÎœİ[RYH’XY[™ÌÈÎ›˜[YHÎ˜[H’XY[™ÈÈ‹ÏÎ˜˜\ÙYÛˆÎ˜[H“›Ü›X[‹ÏÎœQ›Ü›X]ÏÎœÎœÜXÚ[™ÈÎ˜™Y›Ü™OHŒNˆÎ˜Y\HL‹ÏÎšÙY\™^ÏİÎœÎœ”Î˜‹ÏÎœŞˆÎ˜[HŒ‹ÏÎœŞÜÈÎ˜[HŒ‹ÏÎ˜ÛÛÜˆÎ˜[HŒLLNÈ‹ÏİÎœ”İÎœİ[O‚ˆÎœİ[HÎ\OHœ\˜YÜ˜\ˆÎœİ[RYH’XY[™ÍÎ›˜[YHÎ˜[H’XY[™È‹ÏÎ˜˜\ÙYÛˆÎ˜[H“›Ü›X[‹ÏÎœQ›Ü›X]ÏÎœÎœÜXÚ[™ÈÎ˜™Y›Ü™OHŒMLˆÎ˜Y\H‹ÏÎšÙY\™^ÏİÎœÎœ”Î˜‹ÏÎœŞˆÎ˜[HŒŒˆ‹ÏÎœŞÜÈÎ˜[HŒŒˆ‹ÏÎ˜ÛÛÜˆÎ˜[HŒLLNÈ‹ÏİÎœ”İÎœİ[O‚ˆÎœİ[HÎ\OHœ\˜YÜ˜\ˆÎœİ[RYHÛÙSX™[Î›˜[YHÎ˜[HÛÙHX™[‹ÏÎ˜˜\ÙYÛˆÎ˜[H“›Ü›X[‹ÏÎœÎœÜXÚ[™ÈÎ˜™Y›Ü™OHŒLˆÎ˜Y\HL‹ÏÎšÙY\™^ÏİÎœÎœ”Î˜‹ÏÎœ‘›ÛÈÎ˜\ØÚZOHÛÛœÛÛ\ÈˆÎš[œÚOHÛÛœÛÛ\È‹ÏÎœŞˆÎ˜[HŒMH‹ÏÎœŞÜÈÎ˜[HŒMH‹ÏÎ˜ÛÛÜˆÎ˜[HMMŒÈ‹ÏİÎœ”İÎœİ[O‚İÎœİ[\Ï˜Â‚ˆÛÛœİXY\–[HŞ[™\œÚ[ÛHŒKŒˆ[˜ÛÙ[™ÏH•U‹Nˆİ[™[Û™OHY\ÈÏ‚Îšˆ[œÎÏHš‹ËÜØÚ[X\Ë›Ü[[›Ü›X]Ë›Ü™ËİÛÜ™›ØÙ\ÜÚ[™Û[ÌŒ‹ÛXZ[ˆÎœÎœÎœ™Î˜›İÛHÎ˜[HœÚ[™ÛHˆÎœŞHˆÎœÜXÙOHˆÎ˜ÛÛÜH‘QQˆ‹ÏİÎœ™ÎœÜXÚ[™ÈÎ˜Y\HŒ‹ÏİÎœ‰İÛÜ™[ŠTÓSQKÕ\\Ø\ÙJ
-KÈ›ÛˆYKÚ^™NˆMKÛÛÜˆ	ÍÌ	ÈJ_OİÎœİÎš˜Â‚ˆÛÛœİ›Ûİ\–[HŞ[™\œÚ[ÛHŒKŒˆ[˜ÛÙ[™ÏH•U‹Nˆİ[™[Û™OHY\ÈÏ‚Î™ˆ[œÎÏHš‹ËÜØÚ[X\Ë›Ü[[›Ü›X]Ë›Ü™ËİÛÜ™›ØÙ\ÜÚ[™Û[ÌŒ‹ÛXZ[ˆÎœÎœÎš˜ÈÎ˜[HœšYÚ‹ÏÎœ™ÎÜÎ˜[HœÚ[™ÛHˆÎœŞHˆÎœÜXÙOHˆÎ˜ÛÛÜH‘MQMÑPˆ‹ÏİÎœ™ÎœÜXÚ[™ÈÎ˜™Y›Ü™OHŒ‹ÏİÎœ‰İÛÜ™[Š	ÔYÙH	ËÈÚ^™NˆM‹ÛÛÜˆ	ÍÌ	ÈJ_OÎ™›Ú[\HÎš[œİH”QÑH‰İÛÜ™[Š	ÌIËÈÚ^™NˆM‹ÛÛÜˆ	ÍÌ	ÈJ_OİÎ™›Ú[\O‰İÛÜ™[Š	ÈÙˆ	ËÈÚ^™NˆM‹ÛÛÜˆ	ÍÌ	ÈJ_OÎ™›Ú[\HÎš[œİH“•STQÑTÈ‰İÛÜ™[Š	ÌIËÈÚ^™NˆM‹ÛÛÜˆ	ÍÌ	ÈJ_OİÎ™›Ú[\OİÎœİÎ™˜Â‚ˆÛÛœİÛÛ[\\ÈHŞ[™\œÚ[ÛHŒKŒˆ[˜ÛÙ[™ÏH•U‹Nˆİ[™[Û™OHY\ÈÏ‚\\È[œÏHš‹ËÜØÚ[X\Ë›Ü[[›Ü›X]Ë›Ü™ËÜXÚØYÙKÌŒ‹ØÛÛ[]\\È‚ˆY˜][^[œÚ[ÛHœ™[ÈˆÛÛ[\OH˜\XØ][Û‹İ›™›Ü[[›Ü›X]Ë\XÚØYÙKœ™[][ÛœÚ\ÊŞ[‹Ï‚ˆY˜][^[œÚ[ÛH[ˆÛÛ[\OH˜\XØ][Û‹Ş[‹Ï‚ˆİ™\œšYH\˜[YOH‹İÛÜ™ÙØİ[Y[[ˆÛÛ[\OH˜\XØ][Û‹İ›™›Ü[[›Ü›X]Ë[Ù™šXÙYØİ[Y[ÛÜ™›ØÙ\ÜÚ[™Û[™Øİ[Y[›XZ[ŠŞ[‹Ï‚ˆİ™\œšYH\˜[YOH‹İÛÜ™Üİ[\Ë[ˆÛÛ[\OH˜\XØ][Û‹İ›™›Ü[[›Ü›X]Ë[Ù™šXÙYØİ[Y[ÛÜ™›ØÙ\ÜÚ[™Û[œİ[\ÊŞ[‹Ï‚ˆİ™\œšYH\˜[YOH‹İÛÜ™ÚXY\ŒK[ˆÛÛ[\OH˜\XØ][Û‹İ›™›Ü[[›Ü›X]Ë[Ù™šXÙYØİ[Y[ÛÜ™›ØÙ\ÜÚ[™Û[šXY\ŠŞ[‹Ï‚ˆİ™\œšYH\˜[YOH‹İÛÜ™Ù›Ûİ\ŒK[ˆÛÛ[\OH˜\XØ][Û‹İ›™›Ü[[›Ü›X]Ë[Ù™šXÙYØİ[Y[ÛÜ™›ØÙ\ÜÚ[™Û[™›Ûİ\ŠŞ[‹Ï‚ˆİ™\œšYH\˜[YOH‹İÛÜ™ÜÙ][™ÜË[ˆÛÛ[\OH˜\XØ][Û‹İ›™›Ü[[›Ü›X]Ë[Ù™šXÙYØİ[Y[ÛÜ™›ØÙ\ÜÚ[™Û[œÙ][™ÜÊŞ[‹Ï‚ˆİ™\œšYH\˜[YOH‹ÙØÔ›ÜËØÛÜ™K[ˆÛÛ[\OH˜\XØ][Û‹İ›™›Ü[[›Ü›X]Ë\XÚØYÙK˜ÛÜ™K\›Ü\Y\ÊŞ[‹Ï‚Õ\\Ï˜Â‚ˆÛÛœİ›Ûİ™[ÈHŞ[™\œÚ[ÛHŒKŒˆ[˜ÛÙ[™ÏH•U‹Nˆİ[™[Û™OHY\ÈÏ‚™[][ÛœÚ\È[œÏHš‹ËÜØÚ[X\Ë›Ü[[›Ü›X]Ë›Ü™ËÜXÚØYÙKÌŒ‹Ü™[][ÛœÚ\È‚ˆ™[][ÛœÚ\YHœ’YHˆ\OHš‹ËÜØÚ[X\Ë›Ü[[›Ü›X]Ë›Ü™ËÛÙ™šXÙQØİ[Y[ÌŒ‹Ü™[][ÛœÚ\ËÛÙ™šXÙQØİ[Y[ˆ\™Ù]HÛÜ™ÙØİ[Y[[‹Ï‚ˆ™[][ÛœÚ\YHœ’Yˆˆ\OHš‹ËÜØÚ[X\Ë›Ü[[›Ü›X]Ë›Ü™ËÜXÚØYÙKÌŒ‹Ü™[][ÛœÚ\ËÛY]Y]KØÛÜ™K\›Ü\Y\Èˆ\™Ù]H™ØÔ›ÜËØÛÜ™K[‹Ï‚Ô™[][ÛœÚ\Ï˜Â‚ˆÛÛœİØİ[Y[™[ÈHŞ[™\œÚ[ÛHŒKŒˆ[˜ÛÙ[™ÏH•U‹Nˆİ[™[Û™OHY\ÈÏ‚™[][ÛœÚ\È[œÏHš‹ËÜØÚ[X\Ë›Ü[[›Ü›X]Ë›Ü™ËÜXÚØYÙKÌŒ‹Ü™[][ÛœÚ\È‚ˆ™[][ÛœÚ\YHœ’YHˆ\OHš‹ËÜØÚ[X\Ë›Ü[[›Ü›X]Ë›Ü™ËÛÙ™šXÙQØİ[Y[ÌŒ‹Ü™[][ÛœÚ\ËÜİ[\Èˆ\™Ù]Hœİ[\Ë[‹Ï‚ˆ™[][ÛœÚ\YHœ’Yˆˆ\OHš‹ËÜØÚ[X\Ë›Ü[[›Ü›X]Ë›Ü™ËÛÙ™šXÙQØİ[Y[ÌŒ‹Ü™[][ÛœÚ\ËÚXY\ˆˆ\™Ù]HšXY\ŒK[‹Ï‚ˆ™[][ÛœÚ\YHœ’YÈˆ\OHš‹ËÜØÚ[X\Ë›Ü[[›Ü›X]Ë›Ü™ËÛÙ™šXÙQØİ[Y[ÌŒ‹Ü™[][ÛœÚ\ËÙ›Ûİ\ˆˆ\™Ù]H™›Ûİ\ŒK[‹Ï‚ˆ™[][ÛœÚ\YHœ’Yˆ\OHš‹ËÜØÚ[X\Ë›Ü[[›Ü›X]Ë›Ü™ËÛÙ™šXÙQØİ[Y[ÌŒ‹Ü™[][ÛœÚ\ËÜÙ][™ÜÈˆ\™Ù]HœÙ][™ÜË[‹Ï‚ˆ	Ú\\›[šÔ™[Ëš›Ú[Š	×ˆ	Ê_BÔ™[][ÛœÚ\Ï˜Â‚ˆÛÛœİÙ][™ÜÖ[HŞ[™\œÚ[ÛHŒKŒˆ[˜ÛÙ[™ÏH•U‹Nˆİ[™[Û™OHY\ÈÏ‚ÎœÙ][™ÜÈ[œÎÏHš‹ËÜØÚ[X\Ë›Ü[[›Ü›X]Ë›Ü™ËİÛÜ™›ØÙ\ÜÚ[™Û[ÌŒ‹ÛXZ[ˆÎ\]QšY[ÈÎ˜[HYH‹ÏÎ™Y˜][X”İÜÎ˜[HÌŒ‹ÏİÎœÙ][™ÜÏ˜Â‚ˆÛÛœİ›İÈH™]È]J
-KÒTÓÔİš[™Ê
-NÂˆÛÛœİÛÜ™V[HŞ[™\œÚ[ÛHŒKŒˆ[˜ÛÙ[™ÏH•U‹Nˆİ[™[Û™OHY\ÈÏ‚Ü˜ÛÜ™T›Ü\Y\È[œÎ˜ÜHš‹ËÜØÚ[X\Ë›Ü[[›Ü›X]Ë›Ü™ËÜXÚØYÙKÌŒ‹ÛY]Y]KØÛÜ™K\›Ü\Y\Èˆ[œÎ™ÏHš‹ËÜ\››Ü™ËÙËÙ[[Y[ËÌKŒKÈˆ[œÎ™İ\›\ÏHš‹ËÜ\››Ü™ËÙËİ\›\ËÈˆ[œÎÚOHš‹ËİİİËÌË›Ü™ËÌŒKÖSØÚ[XKZ[œİ[˜ÙH‚ˆÎ]O‰Ş[\ØØ\J]J_OÙÎ]O‚ˆÎœİXš™XİÚ]ÔÛÛ™\œØ][Ûˆ^ÜÙÎœİXš™Xİ‚ˆÎ˜Ü™X]Ü‰ĞTÓSQ_OÙÎ˜Ü™X]Ü‚ˆÎ™\ØÜš\[Û‘^ÜYØØ[Hœ›ÛH	Ş[\ØØ\J]K\›	ÉÊ_OÙÎ™\ØÜš\[Û‚ˆİ\›\Î˜Ü™X]YÚN\OH™İ\›\Î•ÌĞÑˆ‰Û›İßOÙİ\›\Î˜Ü™X]Y‚ˆİ\›\Î›[ÙYšYYÚN\OH™İ\›\Î•ÌĞÑˆ‰Û›İßOÙİ\›\Î›[ÙYšYY‚ØÜ˜ÛÜ™T›Ü\Y\Ï˜Â‚ˆÛÛœİ]\ÈHš\İÜ™JÂˆÈ˜[YNˆ	ÖĞÛÛ[Õ\\×K[	Ë]NˆÛÛ[\\ÈKˆÈ˜[YNˆ	×Ü™[ËËœ™[ÉË]Nˆ›Ûİ™[ÈKˆÈ˜[YNˆ	ÙØÔ›ÜËØÛÜ™K[	Ë]NˆÛÜ™V[KˆÈ˜[YNˆ	İÛÜ™ÙØİ[Y[[	Ë]NˆØİ[Y[[KˆÈ˜[YNˆ	İÛÜ™Üİ[\Ë[	Ë]Nˆİ[\Ö[KˆÈ˜[YNˆ	İÛÜ™ÚXY\ŒK[	Ë]NˆXY\–[KˆÈ˜[YNˆ	İÛÜ™Ù›Ûİ\ŒK[	Ë]Nˆ›Ûİ\–[KˆÈ˜[YNˆ	İÛÜ™ÜÙ][™ÜË[	Ë]NˆÙ][™ÜÖ[KˆÈ˜[YNˆ	İÛÜ™×Ü™[ËÙØİ[Y[[œ™[ÉË]NˆØİ[Y[™[ÈBˆJNÂ‚ˆ™]\›ˆ™]È›ØŠØ]\×KÈ\NˆRSQWÑĞÖJNÂˆB‚ˆ[˜İ[Ûˆ^ÜX\šÙİÛŠ]K\›œÊHÂˆÛÛœİ›ØˆH™]È›ØŠØÜ™X]SX\šÙİÛŠ]K\›œÊWKÈ\Nˆ	İ^ÛX\šÙİÛØÚ\œÙ]]]‹N	ÈJNÂˆİÛ›ØY›ØŠ›Ø‹^Üš[[˜[YJ]K\›œË	ÛY	ÊJNÂˆB‚ˆ[˜İ[Ûˆ^ÜØŞ
-]K\›œÊHÂˆİÛ›ØY›ØŠÜ™X]QØŞ›ØŠ]K\›œÊK^Üš[[˜[YJ]K\›œË	ÙØŞ	ÊJNÂˆB‚ˆÛØ˜[\ËÚ]Ô^Ü\ˆHØš™Xİ™œ™Y^™JÂˆ›Ü›X[^™U^ˆØY™Qš[[˜[YKˆ^Üš[[˜[YKˆÜ™X]SX\šÙİÛ‹ˆÜ™X]QØŞ›Ø‹ˆZ[š[[ˆ^ÜX\šÙİÛ‹ˆ^ÜØŞˆ^Ü‹ˆİÛ›ØY›Ø‚ˆJNÂŸJJ
-NÂ
+    function boxedContentXml(contentXml) {
+      return `<w:tbl><w:tblPr><w:tblW w:w="9360" w:type="dxa"/><w:tblBorders><w:left w:val="single" w:sz="20" w:color="64748B"/><w:top w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="9360"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="9360" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="F8FAFC"/><w:tcMar><w:top w:w="150" w:type="dxa"/><w:left w:w="180" w:type="dxa"/><w:bottom w:w="120" w:type="dxa"/><w:right w:w="180" w:type="dxa"/></w:tcMar></w:tcPr>${contentXml || paragraph(' ')}</w:tc></w:tr></w:tbl>`;
+    }
+
+    const body = [];
+    body.push(paragraph('CHATGPT CONVERSATION EXPORT', { style: 'Kicker', keepNext: true }));
+    body.push(paragraph(title, { style: 'Title', keepNext: true }));
+
+    const scope = turns.length === 1 ? 'Single question and answer' : `Complete conversation Â· ${turns.length} Q&A turns`;
+    body.push(wordTable([
+      ['Scope', scope],
+      ['Source', data.url || ''],
+      ['Exported', formatDate(new Date())]
+    ], { header: false }));
+    body.push(paragraph(' ', { after: 120 }));
+
+    turns.forEach((turn, idx) => {
+      const n = Number.isFinite(turn.index) ? turn.index + 1 : idx + 1;
+      body.push(paragraph(`QUESTION ${String(n).padStart(2, '0')}`, { style: 'SectionLabel', keepNext: true }));
+      body.push(boxedContentXml(markdownToWordXml(turn.question.markdown || turn.question.text)));
+
+      const answers = (turn.answers || []).filter(a => a.text || a.markdown);
+      answers.forEach((answer, answerIndex) => {
+        body.push(paragraph(answers.length > 1 ? `ANSWER ${String(answerIndex + 1).padStart(2, '0')}` : 'ANSWER', { style: 'AnswerLabel', keepNext: true, before: 180 }));
+        body.push(markdownToWordXml(answer.markdown || answer.text));
+      });
+
+      if (idx < turns.length - 1) {
+        body.push('<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="4" w:space="8" w:color="D1D5DB"/></w:pBdr><w:spacing w:before="160" w:after="220"/></w:pPr></w:p>');
+      }
+    });
+
+    const sectPr = `<w:sectPr>
+      <w:headerReference w:type="default" r:id="rId2"/>
+      <w:footerReference w:type="default" r:id="rId3"/>
+      <w:pgSz w:w="11906" w:h="16838"/>
+      <w:pgMar w:top="1077" w:right="964" w:bottom="1077" w:left="964" w:header="425" w:footer="425" w:gutter="0"/>
+    </w:sectPr>`;
+
+    const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<w:body>${body.join('')}${sectPr}</w:body></w:document>`;
+
+    const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Aptos" w:hAnsi="Aptos" w:eastAsia="Malgun Gothic" w:cs="Nirmala UI"/><w:sz w:val="21"/><w:szCs w:val="21"/><w:lang w:val="en-US"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="140" w:line="300" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/><w:rPr><w:rFonts w:ascii="Aptos" w:hAnsi="Aptos" w:eastAsia="Malgun Gothic" w:cs="Nirmala UI"/><w:sz w:val="21"/><w:szCs w:val="21"/><w:color w:val="111827"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="40" w:after="260"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="42"/><w:szCs w:val="42"/><w:color w:val="111827"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Kicker"><w:name w:val="Kicker"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="90"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="17"/><w:szCs w:val="17"/><w:color w:val="4B5563"/><w:spacing w:val="20"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="SectionLabel"><w:name w:val="Section Label"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="160" w:after="100"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="17"/><w:szCs w:val="17"/><w:color w:val="374151"/><w:spacing w:val="16"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="AnswerLabel"><w:name w:val="Answer Label"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="220" w:after="100"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="17"/><w:szCs w:val="17"/><w:color w:val="065F46"/><w:spacing w:val="16"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="Heading 2"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="220" w:after="100"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="28"/><w:szCs w:val="28"/><w:color w:val="111827"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="Heading 3"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="180" w:after="90"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="111827"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading4"><w:name w:val="Heading 4"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="150" w:after="80"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="22"/><w:szCs w:val="22"/><w:color w:val="111827"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="CodeLabel"><w:name w:val="Code Label"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="100" w:after="50"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="15"/><w:szCs w:val="15"/><w:color w:val="4B5563"/></w:rPr></w:style>
+</w:styles>`;
+
+    const headerXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="4" w:space="4" w:color="D1D5DB"/></w:pBdr><w:spacing w:after="60"/></w:pPr>${wordRun(APP_NAME.toUpperCase(), { bold: true, size: 15, color: '6B7280' })}</w:p></w:hdr>`;
+
+    const footerXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="right"/><w:pBdr><w:top w:val="single" w:sz="4" w:space="4" w:color="E5E7EB"/></w:pBdr><w:spacing w:before="60"/></w:pPr>${wordRun('Page ', { size: 16, color: '6B7280' })}<w:fldSimple w:instr="PAGE">${wordRun('1', { size: 16, color: '6B7280' })}</w:fldSimple>${wordRun(' of ', { size: 16, color: '6B7280' })}<w:fldSimple w:instr="NUMPAGES">${wordRun('1', { size: 16, color: '6B7280' })}</w:fldSimple></w:p></w:ftr>`;
+
+    const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
+  <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
+  <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+</Types>`;
+
+    const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+</Relationships>`;
+
+    const documentRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>
+  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>
+  ${hyperlinkRels.join('\n  ')}
+</Relationships>`;
+
+    const settingsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:updateFields w:val="true"/><w:defaultTabStop w:val="720"/></w:settings>`;
+
+    const now = new Date().toISOString();
+    const coreXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>${xmlEscape(title)}</dc:title>
+  <dc:subject>ChatGPT conversation export</dc:subject>
+  <dc:creator>${APP_NAME}</dc:creator>
+  <dc:description>Exported locally from ${xmlEscape(data.url || '')}</dc:description>
+  <dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified>
+</cp:coreProperties>`;
+
+    const bytes = zipStore([
+      { name: '[Content_Types].xml', data: contentTypes },
+      { name: '_rels/.rels', data: rootRels },
+      { name: 'docProps/core.xml', data: coreXml },
+      { name: 'word/document.xml', data: documentXml },
+      { name: 'word/styles.xml', data: stylesXml },
+      { name: 'word/header1.xml', data: headerXml },
+      { name: 'word/footer1.xml', data: footerXml },
+      { name: 'word/settings.xml', data: settingsXml },
+      { name: 'word/_rels/document.xml.rels', data: documentRels }
+    ]);
+
+    return new Blob([bytes], { type: MIME_DOCX });
+  }
+
+  function exportMarkdown(data, turns) {
+    const blob = new Blob([createMarkdown(data, turns)], { type: 'text/markdown;charset=utf-8' });
+    downloadBlob(blob, exportFilename(data, turns, 'md'));
+  }
+
+  function exportDocx(data, turns) {
+    downloadBlob(createDocxBlob(data, turns), exportFilename(data, turns, 'docx'));
+  }
+
+  globalThis.ChatGPTExporter = Object.freeze({
+    normalizeText,
+    safeFilename,
+    exportFilename,
+    createMarkdown,
+    createDocxBlob,
+    buildPrintHtml,
+    exportMarkdown,
+    exportDocx,
+    exportPdf,
+    downloadBlob
+  });
+})();
