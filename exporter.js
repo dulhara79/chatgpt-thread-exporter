@@ -511,14 +511,14 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
   function parseInlineTokens(text) {
     const source = String(text || '');
     const tokens = [];
-    const re = /(!\[[^\]]*\]\(https?:\/\/[^)]+\)|\$\$[^$]+\$\$|\$[^$\n]+\$|\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*\n]+\*|_[^_\n]+_|\[[^\]]+\]\(https?:\/\/[^)]+\))/g;
+    const re = /(!\[[^\]]*\]\((?:https?:\/\/[^)]+|data:image\/[^)]+)\)|\$\$[^$]+\$\$|\$[^$\n]+\$|\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*\n]+\*|_[^_\n]+_|\[[^\]]+\]\(https?:\/\/[^)]+\))/g;
     let last = 0;
     let match;
     while ((match = re.exec(source))) {
       if (match.index > last) tokens.push({ type: 'text', text: source.slice(last, match.index) });
       const value = match[0];
       if (value.startsWith('![')) {
-        const m = value.match(/^!\[([^\]]*)\]\((https?:\/\/[^)]+)\)$/);
+        const m = value.match(/^!\[([^\]]*)\]\((https?:\/\/[^)]+|data:image\/[^)]+)\)$/);
         tokens.push({ type: 'image', alt: m?.[1] || 'Image', src: m?.[2] || '' });
       } else if (value.charCodeAt(0) === 36 && value.charCodeAt(1) === 36) tokens.push({ type: 'math', text: value.slice(2, -2).trim(), display: true });
       else if (value.charCodeAt(0) === 36) tokens.push({ type: 'math', text: value.slice(1, -1).trim(), display: false });
@@ -537,7 +537,7 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
 
   async function fetchDocxImageAssets(turns) {
     const found = new Map();
-    const imageRe = /!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g;
+    const imageRe = /!\[([^\]]*)\]\((https?:\/\/[^)]+|data:image\/[^)]+)\)/g;
     for (const turn of turns) {
       const messages = [turn.question].concat(turn.answers || []);
       for (const message of messages) {
@@ -556,13 +556,48 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
       try {
         const response = await fetch(item.src, { credentials: 'omit', referrerPolicy: 'no-referrer' });
         if (!response.ok) continue;
-        const blob = await response.blob();
-        const type = String(blob.type || '').toLowerCase();
+        let blob = await response.blob();
+        let type = String(blob.type || '').toLowerCase();
+        let width = 1000;
+        let height = 625;
+
+        if (type.includes('svg')) {
+          try {
+            const bitmap = await createImageBitmap(blob);
+            width = bitmap.width || width;
+            height = bitmap.height || height;
+            const canvas = document.createElement('canvas');
+            const maxWidth = 1800;
+            const scale = Math.min(1, maxWidth / Math.max(1, width));
+            canvas.width = Math.max(1, Math.round(width * scale));
+            canvas.height = Math.max(1, Math.round(height * scale));
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+            bitmap.close?.();
+            blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png', 1));
+            if (!blob) continue;
+            type = 'image/png';
+            width = canvas.width;
+            height = canvas.height;
+          } catch {
+            continue;
+          }
+        } else {
+          try {
+            const bitmap = await createImageBitmap(blob);
+            width = bitmap.width || width;
+            height = bitmap.height || height;
+            bitmap.close?.();
+          } catch {}
+        }
+
         const ext = type.includes('png') ? 'png' : (type.includes('jpeg') || type.includes('jpg')) ? 'jpg' : type.includes('gif') ? 'gif' : type.includes('webp') ? 'webp' : '';
         if (!ext) continue;
         const bytes = new Uint8Array(await blob.arrayBuffer());
         if (!bytes.length) continue;
-        assets.push({ src: item.src, alt: item.alt, bytes, ext, name: 'image' + (assets.length + 1) + '.' + ext, width: 1000, height: 625 });
+        assets.push({ src: item.src, alt: item.alt, bytes, ext, name: 'image' + (assets.length + 1) + '.' + ext, width, height });
       } catch {}
     }
     return assets;
