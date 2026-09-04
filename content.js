@@ -65,20 +65,103 @@
         return `\n\n${normalizeText(child()).split('\n').map(line => `> ${line}`).join('\n')}\n\n`;
       }
       if (tag === 'a') {
-        const label = normalizeText(child()) || el.getAttribute('href') || '';
+        const label = normalizeText(child()) || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('href') || '';
         const href = el.getAttribute('href') || '';
         return href && !href.startsWith('javascript:') ? `[${label}](${href})` : label;
       }
       if (tag === 'img') {
-        const alt = el.getAttribute('alt') || 'Image';
-        const src = el.getAttribute('src') || '';
-        return src ? `![${alt}](${src})` : `[${alt}]`;
+        const meta = {
+          src: el.currentSrc || el.getAttribute('src') || '',
+          alt: el.getAttribute('alt') || el.getAttribute('aria-label') || 'Image',
+          width: el.naturalWidth || Number(el.getAttribute('width')) || el.getBoundingClientRect().width || 0,
+          height: el.naturalHeight || Number(el.getAttribute('height')) || el.getBoundingClientRect().height || 0,
+          className: String(el.className || ''),
+          role: el.getAttribute('role') || ''
+        };
+        if (!exporter.shouldIncludeImage(meta)) return '';
+        return meta.src ? `![${meta.alt}](${meta.src})` : `[${meta.alt}]`;
+      }
+      const mathClass = String(el.className || '').toLowerCase();
+      if (tag === 'math' || tag === 'mjx-container' || mathClass.includes('katex') || mathClass.includes('mathjax')) {
+        const annotation = el.querySelector('annotation[encoding="application/x-tex"], annotation[encoding="application/tex"]');
+        const tex = normalizeText(annotation?.textContent || el.getAttribute('data-tex') || el.getAttribute('data-latex') || el.getAttribute('aria-label') || el.textContent || '');
+        if (!tex) return '';
+        const display = mathClass.includes('katex-display') || el.getAttribute('display') === 'block';
+        return display ? `\n\n$${tex}$\n\n` : `${tex}(() => {
+  'use strict';
+
+  const ROLE_SELECTOR = '[data-message-author-role="user"], [data-message-author-role="assistant"]';
+  const ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
+  const EXPORT_BUTTON_CLASS = 'cgx-inline-export-button';
+  const THREAD_BUTTON_ID = 'cgx-thread-export-button';
+  const MENU_ID = 'cgx-export-menu';
+  const exporter = globalThis.ChatGPTExporter;
+
+  if (!exporter) {
+    console.error('[ChatGPT Thread Exporter] export engine did not load.');
+    return;
+  }
+
+  function normalizeText(text) {
+    return exporter.normalizeText(text);
+  }
+
+  function visible(element) {
+    if (!(element instanceof Element)) return false;
+    const style = getComputedStyle(element);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function markdownFromElement(root) {
+    if (!root) return '';
+    const clone = root.cloneNode(true);
+
+    clone.querySelectorAll(
+      `button, script, style, svg, .${EXPORT_BUTTON_CLASS}, #${THREAD_BUTTON_ID}, [data-cgx-ui], ` +
+      '[data-testid*="copy"], [data-testid*="feedback"]'
+    ).forEach(el => el.remove());
+
+    function walk(node) {
+      if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || '';
+      if (node.nodeType !== Node.ELEMENT_NODE) return '';
+
+      const el = node;
+      const tag = el.tagName.toLowerCase();
+      const child = () => Array.from(el.childNodes).map(walk).join('');
+
+      if (tag === 'br') return '\n';
+      if (tag === 'hr') return '\n\n---\n\n';
+      if (tag === 'strong' || tag === 'b') return `**${child()}**`;
+      if (tag === 'em' || tag === 'i') return `*${child()}*`;
+      if (tag === 'del' || tag === 's') return `~~${child()}~~`;
+      if (tag === 'code' && el.parentElement?.tagName.toLowerCase() !== 'pre') {
+        return `\`${child().replace(/`/g, '\\`')}\``;
+      }
+      if (tag === 'pre') {
+        const codeEl = el.querySelector('code');
+        const code = codeEl?.innerText ?? el.innerText ?? '';
+        const cls = codeEl?.className || '';
+        const lang = cls.match(/language-([\w-]+)/i)?.[1] ||
+          el.getAttribute('data-language') || '';
+        return `\n\n\`\`\`${lang}\n${code.trimEnd()}\n\`\`\`\n\n`;
+      }
+      if (/^h[1-6]$/.test(tag)) {
+        return `\n\n${'#'.repeat(Number(tag[1]))} ${normalizeText(child())}\n\n`;
+      }
+      if (tag === 'blockquote') {
+        return `\n\n${normalizeText(child()).split('\n').map(line => `> ${line}`).join('\n')}\n\n`;
+      }
+;
       }
       if (tag === 'li') {
         const parent = el.parentElement?.tagName.toLowerCase();
         if (parent === 'ol') {
           const siblings = Array.from(el.parentElement.children).filter(c => c.tagName?.toLowerCase() === 'li');
-          const index = siblings.indexOf(el) + 1;
+          const start = Number(el.parentElement.getAttribute('start') || 1) || 1;
+          const explicit = el.getAttribute('value');
+          const index = explicit !== null ? Number(explicit) : start + siblings.indexOf(el);
           return `${index}. ${normalizeText(child())}\n`;
         }
         return `- ${normalizeText(child())}\n`;
@@ -355,7 +438,7 @@
     const shareButton = findShareButton();
     if (!shareButton?.parentElement) return;
     const button = createThreadExportButton(shareButton);
-    shareButton.insertAdjacentElement('afterend', button);
+    shareButton.insertAdjacentElement('beforebegin', button);
   }
 
   function closeMenu() {
@@ -393,9 +476,10 @@
     menu.setAttribute('role', 'menu');
     menu.innerHTML = `
       <div class="cgx-menu-heading">${heading}</div>
-      <button type="button" data-format="pdf" role="menuitem">${formatIcon('pdf')}<span><strong>PDF document</strong><small>Professional A4 · opens Save as PDF</small></span></button>
-      <button type="button" data-format="docx" role="menuitem">${formatIcon('docx')}<span><strong>Microsoft Word</strong><small>Editable .docx with header & page numbers</small></span></button>
-      <button type="button" data-format="md" role="menuitem">${formatIcon('md')}<span><strong>Markdown</strong><small>Clean structured .md file</small></span></button>`;
+      <label class="cgx-page-size"><span>Page size</span><select data-page-size aria-label="Document page size"><option value="A4" selected>A4 (default)</option><option value="Letter">Letter</option><option value="Legal">Legal</option></select></label>
+      <button type="button" data-format="pdf" role="menuitem">${formatIcon('pdf')}<span><strong>PDF document</strong><small>Professional print-ready document</small></span></button>
+      <button type="button" data-format="docx" role="menuitem">${formatIcon('docx')}<span><strong>Microsoft Word</strong><small>Editable .docx with page controls</small></span></button>
+      <button type="button" data-format="md" role="menuitem">${formatIcon('md')}<span><strong>Markdown</strong><small>Clean semantic .md file</small></span></button>`;
 
     document.body.appendChild(menu);
     positionMenu(menu, anchor);
@@ -405,14 +489,15 @@
         event.preventDefault();
         event.stopPropagation();
         const format = button.dataset.format;
+        const pageSize = menu.querySelector('[data-page-size]')?.value || 'A4';
         try {
           const data = dataProvider();
           if (!data?.turns?.length) throw new Error('No question-and-answer content was found.');
-          if (format === 'pdf') exporter.exportPdf(data, data.turns);
-          else if (format === 'docx') exporter.exportDocx(data, data.turns);
+          if (format === 'pdf') exporter.exportPdf(data, data.turns, { pageSize });
+          else if (format === 'docx') exporter.exportDocx(data, data.turns, { pageSize });
           else exporter.exportMarkdown(data, data.turns);
           closeMenu();
-          showToast(format === 'pdf' ? 'Print view opened — choose Save as PDF.' : `Exported ${format === 'docx' ? 'Word document' : 'Markdown file'}.`);
+          showToast(format === 'pdf' ? `Print view opened (${pageSize}) — choose Save as PDF.` : `Exported ${format === 'docx' ? `Word document (${pageSize})` : 'Markdown file'}.`);
         } catch (error) {
           closeMenu();
           showToast(error?.message || String(error), true);
