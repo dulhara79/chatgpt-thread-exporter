@@ -48,7 +48,7 @@
       if (tag === 'em' || tag === 'i') return `*${child()}*`;
       if (tag === 'del' || tag === 's') return `~~${child()}~~`;
       if (tag === 'code' && el.parentElement?.tagName.toLowerCase() !== 'pre') {
-        return `\`${child().replace(/\`/g, '\\\`')}\``;
+        return `\`${child().replace(/`/g, '\\`')}\``;
       }
       if (tag === 'pre') {
         const codeEl = el.querySelector('code');
