@@ -112,12 +112,12 @@ $('docx').addEventListener('click', async () => {
   }
 });
 
-$('pdf').addEventListener('click', () => {
+$('pdf').addEventListener('click', async () => {
   const turns = selectedTurns();
   if (!turns.length) return;
   try {
-    exporter.exportPdf(state.data, turns, { pageSize: pageSize() });
-    setStatus('Print view opened (' + pageSize() + ') — choose “Save as PDF”.');
+    await exporter.exportPdf(state.data, turns, { pageSize: pageSize() });
+    setStatus('PDF downloaded as ' + exporter.safeFilename(state.data.title || 'ChatGPT Conversation') + '.pdf.');
   } catch (error) {
     setStatus(`PDF export failed: ${error?.message || error}`, true);
   }
