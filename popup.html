@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChatGPT Thread Exporter</title>
+  <style>
+    :root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; width: 440px; min-height: 555px; background: #f7f7f8; color: #202123; }
+    header { padding: 18px 18px 13px; background: #fff; border-bottom: 1px solid #e5e5e5; }
+    h1 { font-size: 18px; margin: 0 0 5px; }
+    .sub { margin: 0; color: #6b6c70; font-size: 12px; line-height: 1.45; }
+    main { padding: 14px 16px 18px; }
+    .toolbar { display: flex; gap: 8px; margin-bottom: 10px; }
+    button { border: 1px solid #d9d9dc; background: #fff; color: #202123; border-radius: 8px; padding: 8px 11px; cursor: pointer; font-weight: 650; }
+    button:hover { background: #f1f1f2; }
+    button.primary { background: #10a37f; color: #fff; border-color: #10a37f; }
+    button.primary:hover { background: #0d8f70; }
+    button:disabled { cursor: default; opacity: .5; }
+    .status { min-height: 18px; font-size: 12px; color: #6b6c70; margin: 8px 0 10px; }
+    .error { color: #b42318; }
+    .meta { background: #fff; border: 1px solid #e2e2e5; border-radius: 9px; padding: 10px 11px; margin-bottom: 10px; }
+    .meta strong { display: block; font-size: 13px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .meta span { font-size: 11px; color: #76777a; }
+    .select-row { display: flex; justify-content: space-between; align-items: center; margin: 9px 1px; }
+    .select-row label { font-size: 12px; color: #55565a; }
+    .turns { max-height: 305px; overflow-y: auto; background: #fff; border: 1px solid #e2e2e5; border-radius: 9px; }
+    .turn { display: grid; grid-template-columns: 22px 1fr; gap: 8px; padding: 10px; border-bottom: 1px solid #efeff1; cursor: pointer; }
+    .turn:last-child { border-bottom: 0; }
+    .turn:hover { background: #fafafa; }
+    .turn input { margin-top: 3px; }
+    .q { font-size: 12px; font-weight: 700; line-height: 1.35; margin-bottom: 4px; }
+    .a { font-size: 11px; color: #6b6c70; line-height: 1.35; }
+    .formats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+    .formats button { padding: 10px 6px; }
+    footer { font-size: 10px; color: #85868a; margin-top: 10px; text-align: center; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>ChatGPT Thread Exporter</h1>
+    <p class="sub">Export the whole conversation or only the Q&amp;A turns you choose. Processing stays in your browser.</p>
+  </header>
+  <main>
+    <div class="toolbar">
+      <button id="refresh">Refresh</button>
+      <button id="all">Select all</button>
+      <button id="none">Clear</button>
+    </div>
+    <div id="status" class="status">Reading this ChatGPT tab…</div>
+    <div id="meta" class="meta" hidden></div>
+    <div class="select-row">
+      <label><span id="count">0</span> selected Q&amp;A turn(s)</label>
+    </div>
+    <div id="turns" class="turns"></div>
+    <div class="formats">
+      <button id="md" class="primary">Markdown</button>
+      <button id="docx">Word .docx</button>
+      <button id="pdf">PDF</button>
+    </div>
+    <footer>V0.2 · in-page export · local-only</footer>
+  </main>
+  <script src="exporter.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
