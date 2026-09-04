@@ -3,6 +3,29 @@
 
   const APP_NAME = 'ChatGPT Thread Exporter';
   const MIME_DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const PAGE_SIZES = Object.freeze({
+    A4: { css: 'A4', width: 11906, height: 16838 },
+    Letter: { css: 'Letter', width: 12240, height: 15840 },
+    Legal: { css: 'Legal', width: 12240, height: 20160 }
+  });
+
+  function normalizePageSize(value) {
+    const key = String(value || 'A4').toLowerCase();
+    if (key === 'letter') return 'Letter';
+    if (key === 'legal') return 'Legal';
+    return 'A4';
+  }
+
+  function shouldIncludeImage(meta = {}) {
+    const src = String(meta.src || '').trim();
+    if (!src || /^javascript:/i.test(src)) return false;
+    const haystack = `${src} ${meta.alt || ''} ${meta.className || ''} ${meta.role || ''}`.toLowerCase();
+    if (/google\.com\/s2\/favicons|favicon|apple-touch-icon|avatar|profile[-_ ]?image|toolbar[-_ ]?icon|tracking[-_ ]?pixel/.test(haystack)) return false;
+    const width = Number(meta.width || 0), height = Number(meta.height || 0);
+    if (width > 0 && height > 0 && width <= 64 && height <= 64) return false;
+    if (width > 0 && height > 0 && width * height < 4096) return false;
+    return true;
+  }
 
   function normalizeText(text) {
     return (text || '')
@@ -75,30 +98,19 @@
 
   function createMarkdown(data, turns) {
     const title = documentTitle(data, turns);
-    const lines = [
-      `# ${title}`,
-      '',
-      '**Document type:** ChatGPT Conversation Export  ',
-      `**Source:** ${data.url || ''}  `,
-      `**Exported:** ${formatDate(new Date())}  `,
-      `**Scope:** ${turns.length === 1 ? 'Single question and answer' : `Complete conversation (${turns.length} Q&A turns)`}`,
-      '',
-      '---',
-      ''
-    ];
+    const lines = [`# ${title}`, ''];
 
     turns.forEach((turn, idx) => {
       const n = Number.isFinite(turn.index) ? turn.index + 1 : idx + 1;
-      lines.push(`## Question ${String(n).padStart(2, '0')}`, '', turn.question.markdown || turn.question.text || '', '');
+      lines.push(`## Question ${n}`, '', turn.question.markdown || turn.question.text || '', '');
       const answers = (turn.answers || []).filter(a => a.text || a.markdown);
       answers.forEach((answer, answerIndex) => {
-        lines.push(answers.length > 1 ? `## Answer ${String(answerIndex + 1).padStart(2, '0')}` : '## Answer', '', answer.markdown || answer.text || '', '');
+        lines.push(answers.length > 1 ? `## Answer ${answerIndex + 1}` : '## Answer', '', answer.markdown || answer.text || '', '');
       });
       if (idx < turns.length - 1) lines.push('---', '');
     });
 
-    lines.push('---', '', `*Generated locally by ${APP_NAME}.*`, '');
-    return lines.join('\n').trimEnd() + '\n';
+    return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
   }
 
   // ---------------- Shared Markdown parser ----------------
@@ -160,7 +172,7 @@
 
       const ordered = raw.match(/^\s*(\d+)\.\s+(.*)$/);
       if (ordered) {
-        blocks.push({ type: 'list', ordered: true, marker: ordered[1], text: ordered[2] });
+        blocks.push({ type: 'list', ordered: true, marker: Number(ordered[1]), text: ordered[2] });
         i += 1;
         continue;
       }
@@ -224,7 +236,10 @@
 
     let value = source
       .replace(/`([^`]+)`/g, (_, code) => stash(`<code class="inline-code">${escapeHtml(code)}</code>`))
-      .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, (_, label, href) => stash(`<a href="${escapeHtml(href)}">${escapeHtml(label)}</a>`));
+      .replace(/!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g, (_, alt, src) => stash(`<figure class="media"><img src="${escapeHtml(src)}" alt="${escapeHtml(alt || 'Image')}" referrerpolicy="no-referrer"></figure>`))
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, (_, label, href) => stash(`<a href="${escapeHtml(href)}">${escapeHtml(label)}</a>`))
+      .replace(/\$\$([^$]+)\$\$/g, (_, tex) => stash(`<div class="math-display">${escapeHtml(tex.trim())}</div>`))
+      .replace(/\$([^$\n]+)\$/g, (_, tex) => stash(`<span class="math-inline">${escapeHtml(tex.trim())}</span>`));
 
     value = escapeHtml(value)
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
@@ -266,10 +281,10 @@
         const wanted = block.ordered ? 'ol' : 'ul';
         if (listType !== wanted) {
           closeList();
-          html.push(wanted === 'ol' ? '<ol>' : '<ul>');
+          html.push(block.ordered ? `<ol start="${block.marker || 1}">` : '<ul>');
           listType = wanted;
         }
-        html.push(`<li>${inlineToHtml(block.text)}</li>`);
+        html.push(block.ordered ? `<li value="${block.marker || 1}">${inlineToHtml(block.text)}</li>` : `<li>${inlineToHtml(block.text)}</li>`);
       } else if (block.type === 'table') {
         const [head, ...rows] = block.rows;
         html.push('<div class="table-wrap"><table><thead><tr>');
