@@ -1,0 +1,9 @@
+{
+  "name": "chatgpt-thread-exporter",
+  "version": "0.3.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/exporter-regression.test.js",
+    "check": "node --check exporter.js && node --check content.js && node --check popup.js"
+  }
+}
