@@ -4,6 +4,31 @@
   const APP_NAME = 'ChatGPT Thread Exporter';
   const MIME_DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
+  const PAGE_SIZES = Object.freeze({
+    A4: { css: 'A4', width: 11906, height: 16838 },
+    Letter: { css: 'Letter', width: 12240, height: 15840 },
+    Legal: { css: 'Legal', width: 12240, height: 20160 }
+  });
+
+  function normalizePageSize(value) {
+    const key = String(value || 'A4').toLowerCase();
+    if (key === 'letter') return 'Letter';
+    if (key === 'legal') return 'Legal';
+    return 'A4';
+  }
+
+  function shouldIncludeImage(meta = {}) {
+    const src = String(meta.src || '').trim();
+    if (!src || /^javascript:/i.test(src)) return false;
+    const haystack = [src, meta.alt || '', meta.className || '', meta.role || ''].join(' ').toLowerCase();
+    if (/google\.com\/s2\/favicons|favicon|apple-touch-icon|avatar|profile[-_ ]?image|toolbar[-_ ]?icon|tracking[-_ ]?pixel/.test(haystack)) return false;
+    const width = Number(meta.width || 0);
+    const height = Number(meta.height || 0);
+    if (width > 0 && height > 0 && width <= 64 && height <= 64) return false;
+    if (width > 0 && height > 0 && width * height < 4096) return false;
+    return true;
+  }
+
   function normalizeText(text) {
     return (text || '')
       .replace(/\u00a0/g, ' ')
@@ -75,30 +100,17 @@
 
   function createMarkdown(data, turns) {
     const title = documentTitle(data, turns);
-    const lines = [
-      `# ${title}`,
-      '',
-      '**Document type:** ChatGPT Conversation Export  ',
-      `**Source:** ${data.url || ''}  `,
-      `**Exported:** ${formatDate(new Date())}  `,
-      `**Scope:** ${turns.length === 1 ? 'Single question and answer' : `Complete conversation (${turns.length} Q&A turns)`}`,
-      '',
-      '---',
-      ''
-    ];
-
+    const lines = ['# ' + title, ''];
     turns.forEach((turn, idx) => {
       const n = Number.isFinite(turn.index) ? turn.index + 1 : idx + 1;
-      lines.push(`## Question ${String(n).padStart(2, '0')}`, '', turn.question.markdown || turn.question.text || '', '');
+      lines.push('## Question ' + n, '', turn.question.markdown || turn.question.text || '', '');
       const answers = (turn.answers || []).filter(a => a.text || a.markdown);
       answers.forEach((answer, answerIndex) => {
-        lines.push(answers.length > 1 ? `## Answer ${String(answerIndex + 1).padStart(2, '0')}` : '## Answer', '', answer.markdown || answer.text || '', '');
+        lines.push(answers.length > 1 ? '## Answer ' + (answerIndex + 1) : '## Answer', '', answer.markdown || answer.text || '', '');
       });
       if (idx < turns.length - 1) lines.push('---', '');
     });
-
-    lines.push('---', '', `*Generated locally by ${APP_NAME}.*`, '');
-    return lines.join('\n').trimEnd() + '\n';
+    return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
   }
 
   // ---------------- Shared Markdown parser ----------------
