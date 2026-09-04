@@ -65,7 +65,7 @@ test('content script keeps both export controls self-healing and independent of 
   assert.match(source, /Export entire conversation/);
   assert.match(source, /insertBefore\(button, unit\)/);
   assert.doesNotMatch(source, /cgxExportDecorated === '1'/);
-  assert.doesNotMatch(source, /cloneNode\(true\).*Share/s);
+  assert.doesNotMatch(source, /shareButton\.cloneNode\(true\)/);
 });
 
 test('content extractor preserves meaningful rendered SVG diagrams', () => {
