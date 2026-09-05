@@ -80,7 +80,7 @@ try {
   const renderStartedAt = Date.now();
   let rendered = null;
   let lastStatus = null;
-  while (Date.now() - renderStartedAt < 60000) {
+  while (Date.now() - renderStartedAt < 8000) {
     try {
       const status = await Promise.race([
         page.evaluate(async () => chrome.runtime.sendMessage({
