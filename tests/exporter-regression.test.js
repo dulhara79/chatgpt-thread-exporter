@@ -141,22 +141,39 @@ test('DOCX equations use native OMML structures', async () => {
   assert.match(raw, /<m:sSup>/);
 });
 
-test('PDF export opens native Save As without debugger, about:blank, or print preview', () => {
+test('PDF export uses MV3 offscreen rendering and native Save As without iframe/debugger paths', () => {
   const exporterSource = fs.readFileSync(require.resolve('../exporter.js'), 'utf8');
   const backgroundSource = fs.readFileSync(require.resolve('../background.js'), 'utf8');
   const rendererSource = fs.readFileSync(require.resolve('../pdf-renderer.js'), 'utf8');
+  const contentSource = fs.readFileSync(require.resolve('../content.js'), 'utf8');
   const manifest = JSON.parse(fs.readFileSync(require.resolve('../manifest.json'), 'utf8'));
 
-  assert.match(exporterSource, /pdf-renderer\.html/);
-  assert.match(exporterSource, /CGX_RENDER_PDF/);
-  assert.match(rendererSource, /html2pdf/);
-  assert.match(rendererSource, /CGX_SAVE_PDF/);
+  assert.match(exporterSource, /CGX_EXPORT_PDF/);
+  assert.doesNotMatch(exporterSource, /createElement\(['"]iframe['"]\)|postMessage\(/);
+
+  assert.match(backgroundSource, /chrome\.offscreen\.createDocument/);
+  assert.match(backgroundSource, /OFFSCREEN_DOCUMENT/);
   assert.match(backgroundSource, /chrome\.downloads\.download/);
   assert.match(backgroundSource, /saveAs: true/);
+  assert.match(backgroundSource, /chrome\.downloads\.onChanged/);
 
+  assert.match(rendererSource, /CGX_OFFSCREEN_RENDER_PDF/);
+  assert.match(rendererSource, /html2pdf/);
+  assert.match(rendererSource, /URL\.createObjectURL/);
+
+  assert.equal(manifest.permissions.includes('offscreen'), true);
   assert.equal(manifest.permissions.includes('debugger'), false);
   assert.equal(manifest.permissions.includes('downloads'), true);
-  assert.doesNotMatch(exporterSource + backgroundSource + rendererSource, /chrome\.debugger|Page\.printToPDF|about:blank|window\.print\(|\.print\(\)/);
+  assert.equal('web_accessible_resources' in manifest, false);
+
+  assert.doesNotMatch(
+    exporterSource + backgroundSource + rendererSource,
+    /chrome\.debugger|Page\.printToPDF|about:blank|window\.print\(|\.print\(\)/
+  );
+
+  assert.match(contentSource, /cgx-format-icon/);
+  assert.match(contentSource, /<svg/);
+  assert.doesNotMatch(contentSource, /cgx-format-badge[^\n]*>PDF<|cgx-format-badge[^\n]*>W<|cgx-format-badge[^\n]*>MD</);
 });
 
 test('A4 remains the default PDF page size', () => {
