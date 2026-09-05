@@ -444,8 +444,16 @@
     if (fallback) fallback.element.appendChild(button);
   }
 
-  function closeMenu() {
-    document.getElementById(MENU_ID)?.remove();
+  let activeMenuAbort = null;
+
+  function closeMenu(menu = null) {
+    const current = document.getElementById(MENU_ID);
+    if (menu && current && menu !== current) return;
+    if (activeMenuAbort) {
+      activeMenuAbort.abort();
+      activeMenuAbort = null;
+    }
+    (menu || current)?.remove();
   }
 
   function positionMenu(menu, anchor) {
@@ -492,6 +500,9 @@
     document.body.appendChild(menu);
     positionMenu(menu, anchor);
 
+    const menuAbort = new AbortController();
+    activeMenuAbort = menuAbort;
+
     menu.querySelectorAll('button[data-format]').forEach(button => {
       button.addEventListener('click', async event => {
         event.preventDefault();
@@ -520,10 +531,10 @@
             exporter.exportMarkdown(data, data.turns);
           }
 
-          closeMenu();
+          closeMenu(menu);
           showToast(format === 'pdf' ? 'PDF ready to save.' : 'Exported ' + (format === 'docx' ? 'Word document (' + pageSize + ')' : 'Markdown file') + '.');
         } catch (error) {
-          closeMenu();
+          closeMenu(menu);
           showToast(error?.message || String(error), true);
         }
       });
@@ -532,13 +543,12 @@
     requestAnimationFrame(() => {
       const outside = event => {
         if (!menu.contains(event.target) && event.target !== anchor && !anchor.contains(event.target)) {
-          closeMenu();
-          document.removeEventListener('pointerdown', outside, true);
+          closeMenu(menu);
         }
       };
-      document.addEventListener('pointerdown', outside, true);
-      window.addEventListener('scroll', closeMenu, { once: true, capture: true });
-      window.addEventListener('resize', closeMenu, { once: true });
+      document.addEventListener('pointerdown', outside, { capture: true, signal: menuAbort.signal });
+      window.addEventListener('scroll', () => closeMenu(menu), { once: true, capture: true, signal: menuAbort.signal });
+      window.addEventListener('resize', () => closeMenu(menu), { once: true, signal: menuAbort.signal });
     });
   }
 
