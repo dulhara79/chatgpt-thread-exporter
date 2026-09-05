@@ -141,46 +141,63 @@ test('DOCX equations use native OMML structures', async () => {
   assert.match(raw, /<m:sSup>/);
 });
 
-test('PDF export uses Chrome native printToPDF and native Save As', () => {
+test('PDF export uses an offscreen vector worker with direct Save As and no debugger/tab path', () => {
   const exporterSource = fs.readFileSync(require.resolve('../exporter.js'), 'utf8');
   const backgroundSource = fs.readFileSync(require.resolve('../background.js'), 'utf8');
+  const workerSource = fs.readFileSync(require.resolve('../pdf-worker.js'), 'utf8');
   const manifest = JSON.parse(fs.readFileSync(require.resolve('../manifest.json'), 'utf8'));
 
+  assert.match(exporterSource, /buildPdfDefinition/);
   assert.match(exporterSource, /CGX_EXPORT_PDF/);
-  assert.match(backgroundSource, /Page\.printToPDF/);
-  assert.match(backgroundSource, /Page\.setDocumentContent/);
-  assert.match(backgroundSource, /chrome\.debugger\.attach/);
+  assert.match(backgroundSource, /chrome\.offscreen\.createDocument/);
+  assert.match(backgroundSource, /pdf-worker\.html/);
   assert.match(backgroundSource, /chrome\.downloads\.download/);
   assert.match(backgroundSource, /saveAs: true/);
-  assert.match(backgroundSource, /active: false/);
   assert.match(backgroundSource, /renderQueue/);
+  assert.match(workerSource, /pdfMake\.createPdf/);
+  assert.match(workerSource, /URL\.createObjectURL/);
 
-  assert.equal(manifest.permissions.includes('debugger'), true);
-  assert.equal(manifest.permissions.includes('tabs'), true);
+  assert.equal(manifest.permissions.includes('debugger'), false);
+  assert.equal(manifest.permissions.includes('tabs'), false);
+  assert.equal(manifest.permissions.includes('offscreen'), true);
   assert.equal(manifest.permissions.includes('downloads'), true);
-  assert.equal(manifest.permissions.includes('offscreen'), false);
 
-  assert.doesNotMatch(backgroundSource, /html2pdf|html2canvas|toCanvas|toDataURL\(['"]image\/jpeg/);
-});
-test('long-thread PDF export does not use raster chunking', () => {
-  const backgroundSource = fs.readFileSync(require.resolve('../background.js'), 'utf8');
-  assert.match(backgroundSource, /Page\.printToPDF/);
-  assert.doesNotMatch(backgroundSource, /collectRenderUnits|splitLargeSection|renderBatchCanvas|appendCanvas|MAX_BATCH_PX/);
-});
-test('A4 remains the default PDF page size', () => {
-  assert.equal(exporter.normalizePageSize(), 'A4');
-  assert.match(exporter.buildPrintHtml(data, turns), /size: A4/);
+  assert.doesNotMatch(backgroundSource + workerSource, /chrome\.debugger|Page\.printToPDF|Page\.setDocumentContent|chrome\.tabs\.create/);
+  assert.doesNotMatch(backgroundSource + workerSource, /html2pdf|html2canvas|renderBatchCanvas|collectRenderUnits/);
 });
 
-
-test('V0.3.7 native PDF engine is single-pass and removes raster renderer dependencies', () => {
-  const backgroundSource = fs.readFileSync(require.resolve('../background.js'), 'utf8');
-  assert.match(backgroundSource, /generateTaggedPDF: true/);
-  assert.match(backgroundSource, /generateDocumentOutline: true/);
-  assert.match(backgroundSource, /preferCSSPageSize: true/);
-  assert.match(backgroundSource, /ReturnAsBase64/);
-  assert.doesNotMatch(backgroundSource, /html2pdf|html2canvas|canvas\.toDataURL|pdf\.addImage/);
+test('semantic PDF definition is structured-clone safe and keeps A4 default', () => {
+  const definition = exporter.buildPdfDefinition(data, turns);
+  assert.equal(definition.pageSize, 'A4');
+  assert.doesNotThrow(() => JSON.stringify(definition));
+  assert.equal(JSON.stringify(definition).includes('QUESTION 01'), true);
+  assert.equal(JSON.stringify(definition).includes('ANSWER'), true);
 });
+
+test('PDF supports Letter and Legal through semantic definition', () => {
+  assert.equal(exporter.buildPdfDefinition(data, turns, { pageSize: 'Letter' }).pageSize, 'Letter');
+  assert.equal(exporter.buildPdfDefinition(data, turns, { pageSize: 'Legal' }).pageSize, 'Legal');
+});
+
+test('multilingual PDF content uses focused fallback rather than whole-page rasterization', () => {
+  const definition = exporter.buildPdfDefinition(data, turns);
+  const raw = JSON.stringify(definition);
+  assert.match(raw, /cgxRasterText/);
+
+  const workerSource = fs.readFileSync(require.resolve('../pdf-worker.js'), 'utf8');
+  assert.match(workerSource, /function rasterText/);
+  assert.doesNotMatch(workerSource, /document\.documentElement|scrollHeight|full[-_ ]?page|full[-_ ]?document/i);
+});
+
+test('export menu lifecycle removes stale capture listeners and is instance-scoped', () => {
+  const contentSource = fs.readFileSync(require.resolve('../content.js'), 'utf8');
+  assert.match(contentSource, /activeMenuAbort/);
+  assert.match(contentSource, /new AbortController\(\)/);
+  assert.match(contentSource, /signal: menuAbort\.signal/);
+  assert.match(contentSource, /closeMenu\(menu\)/);
+  assert.doesNotMatch(contentSource, /document\.removeEventListener\('pointerdown', outside, true\)/);
+});
+
 test('PDF caller has a bounded wait instead of an indefinite Preparing PDF state', () => {
   const exporterSource = fs.readFileSync(require.resolve('../exporter.js'), 'utf8');
   assert.match(exporterSource, /Promise\.race/);
