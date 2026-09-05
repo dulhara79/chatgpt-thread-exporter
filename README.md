@@ -1,8 +1,8 @@
-# ChatGPT Thread Exporter — V0.3.3
+# ChatGPT Thread Exporter — V0.3.6
 
 A local-only Chrome Manifest V3 extension for exporting ChatGPT conversations to professional PDF, Microsoft Word (`.docx`), and Markdown.
 
-## V0.3.3 highlights
+## V0.3.6 highlights
 
 - **Long-thread PDF generation is now chunked by Q&A/answer blocks** instead of rasterizing the entire conversation into one giant canvas. This keeps memory bounded and substantially reduces export time for large conversations.
 - PDF export continues to use an MV3 offscreen document with native Save As, no debugger banner, no visible tab, and no print preview.
