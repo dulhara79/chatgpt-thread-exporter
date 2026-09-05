@@ -179,14 +179,63 @@ test('PDF supports Letter and Legal through semantic definition', () => {
   assert.equal(exporter.buildPdfDefinition(data, turns, { pageSize: 'Legal' }).pageSize, 'Legal');
 });
 
-test('multilingual PDF content uses focused fallback rather than whole-page rasterization', () => {
+test('multilingual PDF content stays selectable vector text with script-aware fonts', () => {
   const definition = exporter.buildPdfDefinition(data, turns);
   const raw = JSON.stringify(definition);
-  assert.match(raw, /cgxRasterText/);
+  assert.doesNotMatch(raw, /cgxRasterText/);
+  assert.match(raw, /NotoSinhala/);
+  assert.match(raw, /NotoTamil/);
+  assert.match(raw, /NotoKorean/);
+  assert.match(raw, /NotoEmoji/);
 
+  const exporterSource = fs.readFileSync(require.resolve('../exporter.js'), 'utf8');
   const workerSource = fs.readFileSync(require.resolve('../pdf-worker.js'), 'utf8');
-  assert.match(workerSource, /function rasterText/);
-  assert.doesNotMatch(workerSource, /document\.documentElement|scrollHeight|full[-_ ]?page|full[-_ ]?document/i);
+  assert.doesNotMatch(exporterSource + workerSource, /cgxRasterText|function rasterText|canvas\.toDataURL\(['"]image\/png['"]\).*text/i);
+});
+
+test('ASCII and box-drawing diagrams stay exact selectable monospace text', () => {
+  const diagramText = [
+    'Clinician Flutter App',
+    '        │',
+    '        │ HTTPS',
+    '        ▼',
+    'Central Backend',
+    '        │',
+    '        ├── C1 Physiological',
+    '        ├── C2 Behavioural',
+    '        ├── C3 Clinical NLP → TC-WPN',
+    '        └── C4 Demographic'
+  ].join('\n');
+  const fence = String.fromCharCode(96).repeat(3);
+  const diagramTurns = [{
+    id: 'diagram',
+    index: 0,
+    question: { role: 'user', text: 'Architecture', markdown: 'Architecture' },
+    answers: [{
+      role: 'assistant',
+      text: diagramText,
+      markdown: fence + 'text\n' + diagramText + '\n' + fence
+    }]
+  }];
+
+  const definition = exporter.buildPdfDefinition(data, diagramTurns);
+  const node = definition.content.find(item => item?.cgxPreformattedDiagram === true);
+  assert.ok(node);
+  assert.equal(node.font, 'NotoMono');
+  assert.equal(node.noWrap, true);
+  assert.equal(node.preserveLeadingSpaces, true);
+  assert.equal(node.preserveTrailingSpaces, true);
+  assert.equal(node.text, diagramText);
+});
+
+test('PDF image pipeline embeds fetchable images and preflights unsupported SVG features', () => {
+  const exporterSource = fs.readFileSync(require.resolve('../exporter.js'), 'utf8');
+  const workerSource = fs.readFileSync(require.resolve('../pdf-worker.js'), 'utf8');
+  assert.match(exporterSource, /fetchPdfImageAssets/);
+  assert.match(exporterSource, /FileReader/);
+  assert.match(workerSource, /svgNeedsRasterFallback/);
+  assert.match(workerSource, /foreignObject/);
+  assert.match(workerSource, /rasterizeSvgGraphic/);
 });
 
 test('export menu lifecycle removes stale capture listeners and is instance-scoped', () => {
