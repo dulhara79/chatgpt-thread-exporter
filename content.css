@@ -249,3 +249,28 @@ html.dark .cgx-export-menu small,
 .cgx-page-size select { min-width:118px; border:1px solid #cbd5e1; border-radius:7px; background:#fff; color:#1f2937; padding:5px 7px; font:600 11px/1.2 ui-sans-serif, sans-serif; }
 .dark .cgx-page-size, html.dark .cgx-page-size, [data-theme="dark"] .cgx-page-size { border-bottom-color:rgba(255,255,255,.12); color:#cbd5e1; }
 .dark .cgx-page-size select, html.dark .cgx-page-size select, [data-theme="dark"] .cgx-page-size select { border-color:rgba(255,255,255,.16); background:#2b2f35; color:#f8fafc; }
+
+.cgx-export-menu > button:disabled {
+  cursor: wait;
+  opacity: .62;
+}
+
+.cgx-export-menu > button.cgx-export-busy {
+  opacity: 1;
+  background: #f8fafc;
+}
+
+.dark .cgx-export-menu > button.cgx-export-busy,
+html.dark .cgx-export-menu > button.cgx-export-busy,
+[data-theme="dark"] .cgx-export-menu > button.cgx-export-busy {
+  background: rgba(255, 255, 255, .07);
+}
+
+.cgx-export-busy .cgx-format-badge {
+  animation: cgx-pulse 1.05s ease-in-out infinite alternate;
+}
+
+@keyframes cgx-pulse {
+  from { transform: scale(.94); opacity: .72; }
+  to { transform: scale(1); opacity: 1; }
+}

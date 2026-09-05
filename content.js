@@ -496,11 +496,27 @@
         try {
           const data = dataProvider();
           if (!data?.turns?.length) throw new Error('No question-and-answer content was found.');
-          if (format === 'pdf') await exporter.exportPdf(data, data.turns, { pageSize });
-          else if (format === 'docx') await exporter.exportDocx(data, data.turns, { pageSize });
-          else exporter.exportMarkdown(data, data.turns);
+
+          if (format === 'pdf') {
+            const strong = button.querySelector('strong');
+            const originalLabel = strong?.textContent || 'PDF document';
+            menu.querySelectorAll('button[data-format]').forEach(item => { item.disabled = true; });
+            button.classList.add('cgx-export-busy');
+            if (strong) strong.textContent = 'Preparing PDF…';
+            try {
+              await exporter.exportPdf(data, data.turns, { pageSize });
+            } finally {
+              button.classList.remove('cgx-export-busy');
+              if (strong) strong.textContent = originalLabel;
+            }
+          } else if (format === 'docx') {
+            await exporter.exportDocx(data, data.turns, { pageSize });
+          } else {
+            exporter.exportMarkdown(data, data.turns);
+          }
+
           closeMenu();
-          showToast(format === 'pdf' ? 'PDF downloaded as ' + exporter.safeFilename(data.title || 'ChatGPT Conversation') + '.pdf.' : 'Exported ' + (format === 'docx' ? 'Word document (' + pageSize + ')' : 'Markdown file') + '.');
+          showToast(format === 'pdf' ? 'PDF ready to save.' : 'Exported ' + (format === 'docx' ? 'Word document (' + pageSize + ')' : 'Markdown file') + '.');
         } catch (error) {
           closeMenu();
           showToast(error?.message || String(error), true);

@@ -1,9 +1,10 @@
-# ChatGPT Thread Exporter — V0.3.2
+# ChatGPT Thread Exporter — V0.3.3
 
 A local-only Chrome Manifest V3 extension for exporting ChatGPT conversations to professional PDF, Microsoft Word (`.docx`), and Markdown.
 
-## V0.3.2 highlights
+## V0.3.3 highlights
 
+- **PDF export now goes straight to the native Save As flow**: no Chrome debugger banner, no temporary `about:blank` tab, and no print-preview page.
 - Export one Q&A or the complete rendered conversation.
 - Every assistant answer gets a self-healing download/export control. If ChatGPT React re-renders an action row and removes the control, the extension inserts it again.
 - Conversation-level **Export** is inserted immediately to the **left of Share** when Share is discoverable, with a deterministic same-header fallback. The control is extension-owned rather than cloned from ChatGPT, so disabled/hidden Share state cannot block it.
@@ -44,7 +45,7 @@ Use the **Export** control beside the conversation header Share action. The exte
 
 ### PDF
 
-Uses Chromium's native PDF renderer through the extension background service worker. Clicking **PDF** downloads the file directly without opening a new page or showing the print dialog. The PDF filename is the conversation title. A4 remains the default page size.
+PDFs are generated locally inside an invisible extension-owned render frame using the bundled `html2pdf.js` engine, then passed to Chrome's Downloads API with `saveAs: true`. Clicking **PDF** therefore prepares the document and opens the native **Save As** dialog directly—without debugger mode, a temporary browser tab, or print preview. The suggested filename is the conversation title, and A4 remains the default page size.
 
 ### Word (.docx)
 
@@ -62,7 +63,7 @@ Produces clean semantic Markdown without the old metadata table. Lists, headings
 - No ChatGPT credentials.
 - No undocumented ChatGPT API.
 - Conversation processing and document generation stay in the browser.
-- Permissions include `activeTab`, `debugger`, and `downloads`, plus ChatGPT host access. `debugger` is used only on the extension-created temporary render tab for Chrome's native PDF renderer; `downloads` saves the generated PDF automatically.
+- Permissions are limited to `activeTab` and `downloads`, plus ChatGPT host access. There is **no `debugger` permission**. `downloads` is used only to open Chrome's native Save As flow for the locally generated PDF.
 
 The extension intentionally does not request broad host permissions solely to improve rare cross-origin image cases.
 
@@ -84,7 +85,7 @@ npm test
 npm run check
 ```
 
-The regression suite covers metadata removal, ordered list sequence, A4/Letter/Legal, favicon filtering, multilingual Unicode/emoji, TeX preservation, and DOCX numbering/page geometry.
+The regression suite covers metadata removal, ordered list sequence, A4/Letter/Legal, favicon filtering, multilingual Unicode/emoji, TeX preservation, DOCX numbering/page geometry, and a hard guard against reintroducing debugger/print-preview PDF export.
 
 GitHub Actions runs the same checks on pull requests to `main`.
 
@@ -101,6 +102,10 @@ The approved V0.3 design is documented at:
 
 `docs/superpowers/specs/2026-09-04-professional-export-rendering-design.md`
 
+## Third-party component
+
+PDF generation bundles `html2pdf.js` v0.14.0 and its upstream license notices under `vendor/`. The library executes locally inside the extension; no document content is sent to a PDF service.
+
 ## Version
 
-V0.3.2
+V0.3.3
