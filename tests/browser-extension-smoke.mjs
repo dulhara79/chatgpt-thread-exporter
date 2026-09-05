@@ -52,14 +52,14 @@ try {
     process.stdout.write('Could not attach offscreen diagnostics: ' + error.message + '\n');
   }
 
-  const rendered = await page.evaluate(async () => {
+  const accepted = await page.evaluate(async () => {
     const jobId = globalThis.__cgxSmokeJobId;
     const definition = {
-      pageSize: 'A4',
-      pageMargins: [51, 51, 51, 55],
-      defaultStyle: { font:'Roboto', fontSize:10.5 },
-      content: [{
-        text: [
+      pageSize:'A4',
+      pageMargins:[51, 51, 51, 55],
+      defaultStyle:{ font:'Roboto', fontSize:10.5 },
+      content:[{
+        text:[
           { text:'English ' },
           { text:'සිංහල ', cgxFont:'sinhala' },
           { text:'தமிழ் ', cgxFont:'tamil' },
@@ -68,7 +68,7 @@ try {
           { text:'😀', cgxFont:'emoji' }
         ]
       }, {
-        cgxPreformatted: {
+        cgxPreformatted:{
           text:'Clinician App\\n    │\\n    ▼\\nCentral Backend',
           diagram:true,
           language:'text'
@@ -76,12 +76,44 @@ try {
       }]
     };
     return chrome.runtime.sendMessage({
-      target: 'cgx-offscreen-pdf',
-      type: 'CGX_OFFSCREEN_SMOKE_RENDER',
+      target:'cgx-offscreen-pdf',
+      type:'CGX_OFFSCREEN_START_SMOKE',
       jobId,
       definition
     });
   });
+  process.stdout.write('Start result: ' + JSON.stringify(accepted) + '\n');
+  if (!accepted?.ok || !accepted?.accepted) {
+    throw new Error('Real Chrome offscreen renderer did not accept smoke job: ' + JSON.stringify(accepted));
+  }
+
+  const renderStartedAt = Date.now();
+  let rendered = null;
+  while (Date.now() - renderStartedAt < 60000) {
+    try {
+      const status = await Promise.race([
+        page.evaluate(async () => chrome.runtime.sendMessage({
+          target:'cgx-offscreen-pdf',
+          type:'CGX_OFFSCREEN_PDF_STATUS',
+          jobId:globalThis.__cgxSmokeJobId
+        })),
+        new Promise(resolve => setTimeout(() => resolve(null), 1200))
+      ]);
+      if (status?.found && status.state === 'done') {
+        rendered = { ok:true, jobId:status.jobId, ...status.result };
+        break;
+      }
+      if (status?.found && status.state === 'error') {
+        rendered = { ok:false, jobId:status.jobId, error:status.error };
+        break;
+      }
+    } catch {}
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  if (!rendered) {
+    rendered = { ok:false, error:'Browser smoke polling deadline exceeded.' };
+  }
+  rendered.elapsedMs = Date.now() - renderStartedAt;
   process.stdout.write('Render result: ' + JSON.stringify(rendered) + '\n');
   const result = { prepared, rendered };
 
