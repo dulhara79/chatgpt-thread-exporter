@@ -141,15 +141,22 @@ test('DOCX equations use native OMML structures', async () => {
   assert.match(raw, /<m:sSup>/);
 });
 
-test('PDF export uses background direct download with conversation-title filename', () => {
+test('PDF export opens native Save As without debugger, about:blank, or print preview', () => {
   const exporterSource = fs.readFileSync(require.resolve('../exporter.js'), 'utf8');
   const backgroundSource = fs.readFileSync(require.resolve('../background.js'), 'utf8');
-  assert.match(exporterSource, /CGX_EXPORT_PDF/);
-  assert.doesNotMatch(exporterSource, /window\.open\(url/);
-  assert.doesNotMatch(exporterSource, /win\.print\(\)/);
-  assert.match(backgroundSource, /Page\.printToPDF/);
+  const rendererSource = fs.readFileSync(require.resolve('../pdf-renderer.js'), 'utf8');
+  const manifest = JSON.parse(fs.readFileSync(require.resolve('../manifest.json'), 'utf8'));
+
+  assert.match(exporterSource, /pdf-renderer\.html/);
+  assert.match(exporterSource, /CGX_RENDER_PDF/);
+  assert.match(rendererSource, /html2pdf/);
+  assert.match(rendererSource, /CGX_SAVE_PDF/);
   assert.match(backgroundSource, /chrome\.downloads\.download/);
-  assert.match(backgroundSource, /saveAs: false/);
+  assert.match(backgroundSource, /saveAs: true/);
+
+  assert.equal(manifest.permissions.includes('debugger'), false);
+  assert.equal(manifest.permissions.includes('downloads'), true);
+  assert.doesNotMatch(exporterSource + backgroundSource + rendererSource, /chrome\.debugger|Page\.printToPDF|about:blank|window\.print\(|\.print\(\)/);
 });
 
 test('A4 remains the default PDF page size', () => {
