@@ -7,8 +7,16 @@
 
   function registerFonts() {
     if (!globalThis.pdfMake?.createPdf) return;
+    const base = {
+      Roboto: {
+        normal: 'Roboto-Regular.ttf',
+        bold: 'Roboto-Medium.ttf',
+        italics: 'Roboto-Italic.ttf',
+        bolditalics: 'Roboto-MediumItalic.ttf'
+      }
+    };
     const extra = globalThis.CGX_PDF_EXTRA_FONTS || {};
-    globalThis.pdfMake.fonts = Object.assign({}, globalThis.pdfMake.fonts || {}, extra);
+    globalThis.pdfMake.fonts = Object.assign({}, base, globalThis.pdfMake.fonts || {}, extra);
   }
 
   function decodeSvgDataUrl(src) {
