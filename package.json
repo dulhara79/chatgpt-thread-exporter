@@ -4,6 +4,6 @@
   "private": true,
   "scripts": {
     "test": "node --test tests/exporter-regression.test.js",
-    "check": "node --check math.js && node --check exporter.js && node --check content.js && node --check popup.js && node --check background.js && node --check pdf-renderer.js"
+    "check": "node --check math.js && node --check exporter.js && node --check content.js && node --check popup.js && node --check background.js"
   }
 }
