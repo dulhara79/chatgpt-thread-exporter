@@ -79,6 +79,7 @@ try {
 
   const renderStartedAt = Date.now();
   let rendered = null;
+  let lastStatus = null;
   while (Date.now() - renderStartedAt < 60000) {
     try {
       const status = await Promise.race([
@@ -89,6 +90,7 @@ try {
         })),
         new Promise(resolve => setTimeout(() => resolve(null), 1200))
       ]);
+      if (status?.found) lastStatus = status;
       if (status?.found && status.state === 'done') {
         rendered = { ok:true, jobId:status.jobId, ...status.result };
         break;
@@ -101,7 +103,11 @@ try {
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
   if (!rendered) {
-    rendered = { ok:false, error:'Browser smoke polling deadline exceeded.' };
+    rendered = {
+      ok:false,
+      error:'Browser smoke polling deadline exceeded.',
+      lastStatus
+    };
   }
   rendered.elapsedMs = Date.now() - renderStartedAt;
   process.stdout.write('Render result: ' + JSON.stringify(rendered) + '\n');
