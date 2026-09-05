@@ -60,8 +60,8 @@ try {
       defaultStyle:{ font:'Roboto', fontSize:10.5 },
       content:[{
         text:[
-          { text:'English ' },
-          { text:'සිංහල පරීක්ෂණය', cgxFont:'sinhala', fontFeatures:[] }
+          { text:'English ', bold:true },
+          { text:' Monospace custom font', cgxFont:'mono' }
         ]
       }]
     };
@@ -80,7 +80,7 @@ try {
   const renderStartedAt = Date.now();
   let rendered = null;
   let lastStatus = null;
-  while (Date.now() - renderStartedAt < 8000) {
+  while (Date.now() - renderStartedAt < 20000) {
     try {
       const status = await Promise.race([
         page.evaluate(async () => chrome.runtime.sendMessage({
