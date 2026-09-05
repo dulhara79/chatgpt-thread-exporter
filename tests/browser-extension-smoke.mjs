@@ -59,20 +59,9 @@ try {
       pageMargins:[51, 51, 51, 55],
       defaultStyle:{ font:'Roboto', fontSize:10.5 },
       content:[{
-        text:[
-          { text:'English ' },
-          { text:'සිංහල ', cgxFont:'sinhala' },
-          { text:'தமிழ் ', cgxFont:'tamil' },
-          { text:'한국어 ', cgxFont:'korean' },
-          { text:'→ ✓ ', cgxFont:'symbols' },
-          { text:'😀', cgxFont:'emoji' }
-        ]
+        text:'English browser PDF baseline'
       }, {
-        cgxPreformatted:{
-          text:'Clinician App\\n    │\\n    ▼\\nCentral Backend',
-          diagram:true,
-          language:'text'
-        }
+        text:'Second paragraph to exercise page layout.'
       }]
     };
     return chrome.runtime.sendMessage({
