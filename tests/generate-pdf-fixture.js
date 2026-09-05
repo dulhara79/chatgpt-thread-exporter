@@ -1,16 +1,39 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const pdfMake = require('../vendor/pdfmake.min.js');
-globalThis.pdfMake = pdfMake;
-require('../vendor/vfs_fonts.js');
-require('../vendor/vfs_extra_fonts.js');
+function fail(stage, error) {
+  const name = error?.name || 'Error';
+  const message = error?.message || String(error);
+  process.stderr.write('CGX_FIXTURE_ERROR [' + stage + '] ' + name + ': ' + message + '\n');
+  process.exit(1);
+}
 
-if (!globalThis.CGX_PDF_EXTRA_FONTS) throw new Error('Multilingual PDF fonts did not load.');
+process.on('uncaughtException', error => fail('uncaughtException', error));
+process.on('unhandledRejection', error => fail('unhandledRejection', error));
+
+let pdfMake;
+try {
+  process.stderr.write('CGX_FIXTURE_STAGE require-pdfmake\n');
+  pdfMake = require('../vendor/pdfmake.min.js');
+  process.stderr.write('CGX_FIXTURE_STAGE pdfmake-loaded\n');
+} catch (error) { fail('require-pdfmake', error); }
+
+try {
+  globalThis.pdfMake = pdfMake;
+  require('../vendor/vfs_fonts.js');
+  process.stderr.write('CGX_FIXTURE_STAGE roboto-vfs-loaded\n');
+  require('../vendor/vfs_extra_fonts.js');
+  process.stderr.write('CGX_FIXTURE_STAGE extra-vfs-loaded\n');
+} catch (error) { fail('load-vfs', error); }
+
+if (!globalThis.CGX_PDF_EXTRA_FONTS) fail('extra-fonts', new Error('Multilingual PDF fonts did not load.'));
 pdfMake.fonts = Object.assign({}, pdfMake.fonts || {}, globalThis.CGX_PDF_EXTRA_FONTS);
 
-require('../math.js');
-require('../exporter.js');
+try {
+  require('../math.js');
+  require('../exporter.js');
+  process.stderr.write('CGX_FIXTURE_STAGE exporter-loaded\n');
+} catch (error) { fail('load-exporter', error); }
 const exporter = globalThis.ChatGPTExporter;
 
 const diagram = [
@@ -51,7 +74,12 @@ const turns = [{
   }]
 }];
 
-const definition = exporter.buildPdfDefinition(data, turns, { pageSize: 'A4' });
+let definition;
+try {
+  definition = exporter.buildPdfDefinition(data, turns, { pageSize: 'A4' });
+  process.stderr.write('CGX_FIXTURE_STAGE definition-built\n');
+} catch (error) { fail('build-definition', error); }
+
 definition.footer = (currentPage, pageCount) => ({
   columns: [
     { text: 'ChatGPT Thread Exporter', alignment: 'left' },
@@ -63,7 +91,13 @@ definition.footer = (currentPage, pageCount) => ({
 });
 
 const output = path.join(__dirname, 'v039-selectable-fixture.pdf');
-pdfMake.createPdf(definition).getBuffer(buffer => {
-  fs.writeFileSync(output, Buffer.from(buffer));
-  process.stdout.write(output + '\n');
-});
+try {
+  process.stderr.write('CGX_FIXTURE_STAGE create-pdf\n');
+  pdfMake.createPdf(definition).getBuffer(buffer => {
+    try {
+      fs.writeFileSync(output, Buffer.from(buffer));
+      process.stderr.write('CGX_FIXTURE_STAGE pdf-written\n');
+      process.stdout.write(output + '\n');
+    } catch (error) { fail('write-pdf', error); }
+  });
+} catch (error) { fail('create-pdf', error); }
