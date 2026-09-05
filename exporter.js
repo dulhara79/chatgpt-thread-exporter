@@ -468,8 +468,8 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
       pushBlocks(turn.question.markdown || turn.question.text || '');
       const qBlocks = content.splice(qStart);
       content.push({
-        table: { widths: [3, '*'], body: [['', { stack: qBlocks, margin: [9, 7, 8, 3] }]] },
-        layout: { fillColor: () => '#F7F9FC', hLineWidth: () => 0, vLineWidth: i => i === 1 ? 1.1 : 0, vLineColor: () => '#2E5B88' },
+        table: { widths: [3, '*'], body: [[{ text: '', fillColor: '#2E5B88' }, { stack: qBlocks, margin: [9, 7, 8, 3], fillColor: '#F7F9FC' }]] },
+        layout: 'noBorders',
         margin: [0, 0, 0, 10]
       });
 
@@ -500,15 +500,6 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
         label: { fontSize: 8.2, bold: true, color: '#5A6B7E', characterSpacing: 0.8 },
         answerLabel: { fontSize: 8.2, bold: true, color: '#1E3A5F', characterSpacing: 0.8 }
       },
-      footer: (currentPage, pageCount) => ({
-        columns: [
-          { text: APP_NAME, alignment: 'left' },
-          { text: 'Page ' + currentPage + ' of ' + pageCount, alignment: 'right' }
-        ],
-        margin: [51, 10, 51, 0],
-        fontSize: 8,
-        color: '#64748B'
-      }),
       content
     };
   }
