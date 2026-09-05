@@ -415,10 +415,28 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
 
   function pdfTextNode(text, extra = {}) {
     const value = String(text || '');
-    if (/[^\u0000-\u024F\u2000-\u206F\u2190-\u22FF]/u.test(value) || /\$|\\\(|\\\[|\\frac|\\sqrt|\\sum|\\int/.test(value)) {
-      return { cgxRasterText: value, ...extra };
-    }
-    return { text: value, ...extra };
+    const tokens = parseInlineTokens(value);
+    const visible = tokens.filter(token => token.type !== 'image');
+    const plain = visible.map(token => token.text || '').join('');
+    const complex = /[^\u0000-\u024F\u2000-\u206F\u2190-\u22FF]/u.test(plain) || visible.some(token => token.type === 'math');
+
+    if (complex) return { cgxRasterText: plain, ...extra };
+
+    const runs = visible.map(token => {
+      const run = { text: token.text || '' };
+      if (token.type === 'bold') run.bold = true;
+      else if (token.type === 'italic') run.italics = true;
+      else if (token.type === 'code') { run.background = '#F1F5F9'; run.fontSize = 9; }
+      else if (token.type === 'link') { run.link = token.href || undefined; run.color = '#1E5A8A'; run.decoration = 'underline'; }
+      return run;
+    });
+    return { text: runs, ...extra };
+  }
+
+  function pdfImageNodes(text) {
+    return parseInlineTokens(text)
+      .filter(token => token.type === 'image' && token.src && shouldIncludeImage({ src: token.src, alt: token.alt, width: 800, height: 500 }))
+      .map(token => ({ cgxImage: { src: token.src, alt: token.alt || 'Image' }, margin: [0, 4, 0, 8] }));
   }
 
   function buildPdfDefinition(data, turns, options = {}) {
@@ -432,7 +450,9 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
         if (block.type === 'heading') {
           content.push(pdfTextNode(block.text, { style: block.level <= 2 ? 'h2' : 'h3', margin: [0, 8, 0, 5] }));
         } else if (block.type === 'text') {
-          content.push(pdfTextNode(block.text, { margin: [0, 0, 0, 7], lineHeight: 1.28 }));
+          const textNode = pdfTextNode(block.text, { margin: [0, 0, 0, 7], lineHeight: 1.28 });
+          if ((textNode.text && textNode.text.length) || textNode.cgxRasterText) content.push(textNode);
+          content.push(...pdfImageNodes(block.text));
         } else if (block.type === 'quote') {
           content.push(pdfTextNode(block.text, { margin: [10, 4, 8, 8], color: '#405268', background: '#F8FAFC' }));
         } else if (block.type === 'rule') {
