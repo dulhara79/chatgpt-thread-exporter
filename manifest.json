@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ChatGPT Thread Exporter",
   "short_name": "GPT Export",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Export an entire ChatGPT conversation or any individual Q&A to professional PDF, Word (.docx), or Markdown documents.",
   "permissions": [
     "activeTab",
