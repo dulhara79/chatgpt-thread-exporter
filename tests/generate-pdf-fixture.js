@@ -20,21 +20,13 @@ try {
 
 try {
   globalThis.pdfMake = pdfMake;
-  require('../vendor/vfs_fonts.js');
-  process.stderr.write('CGX_FIXTURE_STAGE roboto-vfs-loaded\n');
   require('../vendor/vfs_extra_fonts.js');
   process.stderr.write('CGX_FIXTURE_STAGE extra-vfs-loaded\n');
 } catch (error) { fail('load-vfs', error); }
 
-if (!globalThis.CGX_PDF_EXTRA_FONTS) fail('extra-fonts', new Error('Multilingual PDF fonts did not load.'));
-pdfMake.fonts = Object.assign({
-  Roboto: {
-    normal: 'Roboto-Regular.ttf',
-    bold: 'Roboto-Medium.ttf',
-    italics: 'Roboto-Italic.ttf',
-    bolditalics: 'Roboto-MediumItalic.ttf'
-  }
-}, pdfMake.fonts || {}, globalThis.CGX_PDF_EXTRA_FONTS);
+if (!globalThis.CGX_PDF_FONTS || !globalThis.CGX_PDF_VFS) fail('extra-fonts', new Error('Multilingual PDF fonts did not load.'));
+if (pdfMake.addVirtualFileSystem) pdfMake.addVirtualFileSystem(globalThis.CGX_PDF_VFS);
+if (pdfMake.setFonts) pdfMake.setFonts(globalThis.CGX_PDF_FONTS);
 
 try {
   require('../math.js');
