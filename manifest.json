@@ -2,11 +2,12 @@
   "manifest_version": 3,
   "name": "ChatGPT Thread Exporter",
   "short_name": "GPT Export",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Export an entire ChatGPT conversation or any individual Q&A to professional PDF, Word (.docx), or Markdown documents.",
   "permissions": [
     "activeTab",
-    "downloads"
+    "downloads",
+    "offscreen"
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
@@ -35,16 +36,5 @@
   ],
   "background": {
     "service_worker": "background.js"
-  },
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "pdf-renderer.html"
-      ],
-      "matches": [
-        "https://chatgpt.com/*",
-        "https://chat.openai.com/*"
-      ]
-    }
-  ]
+  }
 }

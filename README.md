@@ -4,7 +4,8 @@ A local-only Chrome Manifest V3 extension for exporting ChatGPT conversations to
 
 ## V0.3.3 highlights
 
-- **PDF export now goes straight to the native Save As flow**: no Chrome debugger banner, no temporary `about:blank` tab, and no print-preview page.
+- **PDF export now uses an MV3 offscreen document** instead of the previous hidden cross-origin iframe, eliminating the renderer handshake timeout while keeping the native Save As flow, no debugger banner, no visible tab, and no print preview.
+- PDF, Word, and Markdown actions now use consistent professional SVG document icons instead of text-letter badges.
 - Export one Q&A or the complete rendered conversation.
 - Every assistant answer gets a self-healing download/export control. If ChatGPT React re-renders an action row and removes the control, the extension inserts it again.
 - Conversation-level **Export** is inserted immediately to the **left of Share** when Share is discoverable, with a deterministic same-header fallback. The control is extension-owned rather than cloned from ChatGPT, so disabled/hidden Share state cannot block it.
@@ -45,7 +46,7 @@ Use the **Export** control beside the conversation header Share action. The exte
 
 ### PDF
 
-PDFs are generated locally inside an invisible extension-owned render frame using the bundled `html2pdf.js` engine, then passed to Chrome's Downloads API with `saveAs: true`. Clicking **PDF** therefore prepares the document and opens the native **Save As** dialog directly—without debugger mode, a temporary browser tab, or print preview. The suggested filename is the conversation title, and A4 remains the default page size.
+PDFs are generated locally inside an MV3 **offscreen document** using the bundled `html2pdf.js` engine, then passed to Chrome's Downloads API with `saveAs: true`. This avoids the previous webpage-to-extension iframe handshake entirely. Clicking **PDF** prepares the document and opens the native **Save As** dialog without debugger mode, a visible browser tab, or print preview. The generated blob stays alive until Chrome reports the download complete or interrupted. The suggested filename is the conversation title, and A4 remains the default page size.
 
 ### Word (.docx)
 
@@ -63,7 +64,7 @@ Produces clean semantic Markdown without the old metadata table. Lists, headings
 - No ChatGPT credentials.
 - No undocumented ChatGPT API.
 - Conversation processing and document generation stay in the browser.
-- Permissions are limited to `activeTab` and `downloads`, plus ChatGPT host access. There is **no `debugger` permission**. `downloads` is used only to open Chrome's native Save As flow for the locally generated PDF.
+- Permissions are limited to `activeTab`, `downloads`, and `offscreen`, plus ChatGPT host access. There is **no `debugger` permission**. `offscreen` provides a hidden extension DOM for local PDF rendering; `downloads` opens Chrome's native Save As flow.
 
 The extension intentionally does not request broad host permissions solely to improve rare cross-origin image cases.
 
