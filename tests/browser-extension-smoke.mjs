@@ -1,48 +1,30 @@
-import puppeteer from 'puppeteer-core';
+import puppeteer from 'puppeteer';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import crypto from 'node:crypto';
 
 const extensionPath = path.resolve('.');
-const executablePath = process.env.CHROME_PATH;
-if (!executablePath || !fs.existsSync(executablePath)) {
-  throw new Error('CHROME_PATH must point to an installed Chrome/Chromium binary.');
-}
-
 const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cgx-chrome-'));
 const browser = await puppeteer.launch({
-  executablePath,
   headless: false,
   userDataDir,
-  args: [
-    '--no-sandbox',
-    '--disable-dev-shm-usage',
-    '--disable-extensions-except=' + extensionPath,
-    '--load-extension=' + extensionPath
-  ]
+  enableExtensions: [extensionPath],
+  args: ['--no-sandbox', '--disable-dev-shm-usage']
 });
 
 try {
-  // Chromium derives an unpacked extension id from the normalized absolute
-  // extension path: SHA-256, first 32 hex nibbles, map 0..f to a..p.
-  const digest = crypto.createHash('sha256').update(extensionPath).digest('hex').slice(0, 32);
-  const extensionId = Array.from(digest, ch => String.fromCharCode(97 + parseInt(ch, 16))).join('');
+  const target = await browser.waitForTarget(
+    item => item.type() === 'service_worker' && item.url().endsWith('/background.js'),
+    { timeout:20000 }
+  );
+  const extensionId = new URL(target.url()).host;
+  if (!extensionId) throw new Error('Could not determine unpacked extension id.');
 
   const page = await browser.newPage();
-  const popupUrl = 'chrome-extension://' + extensionId + '/popup.html';
-  let lastError = null;
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    try {
-      await page.goto(popupUrl, { waitUntil: 'domcontentloaded', timeout:5000 });
-      lastError = null;
-      break;
-    } catch (error) {
-      lastError = error;
-      await new Promise(resolve => setTimeout(resolve, 250));
-    }
-  }
-  if (lastError) throw lastError;
+  await page.goto('chrome-extension://' + extensionId + '/popup.html', {
+    waitUntil:'domcontentloaded',
+    timeout:10000
+  });
 
   const result = await page.evaluate(async () => {
     const jobId = 'browser-smoke-' + Date.now();
