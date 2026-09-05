@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const DEBUGGER_VERSION = '1.3';
+  const SAVE_MESSAGE = 'CGX_SAVE_PDF';
 
   function sanitizeFilename(name) {
     const cleaned = String(name || 'ChatGPT Conversation')
@@ -9,89 +9,44 @@
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 120);
-    return (cleaned || 'ChatGPT Conversation') + '.pdf';
+    const base = (cleaned || 'ChatGPT Conversation').replace(/\.pdf$/i, '');
+    return base + '.pdf';
   }
 
-  async function waitForDocument(debuggee) {
-    await chrome.debugger.sendCommand(debuggee, 'Runtime.evaluate', {
-      expression: `(async () => {
-        try {
-          if (document.fonts && document.fonts.ready) await document.fonts.ready;
-          const images = Array.from(document.images || []);
-          await Promise.all(images.map(img => {
-            if (img.complete) return Promise.resolve();
-            return new Promise(resolve => {
-              const done = () => resolve();
-              img.addEventListener('load', done, { once: true });
-              img.addEventListener('error', done, { once: true });
-              setTimeout(done, 5000);
-            });
-          }));
-          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-        } catch {}
-        return true;
-      })()`,
-      awaitPromise: true,
-      returnByValue: true
+  function trustedRenderer(sender) {
+    const expected = chrome.runtime.getURL('pdf-renderer.html');
+    return sender?.url === expected;
+  }
+
+  function trustedBlobUrl(url) {
+    const extensionOrigin = chrome.runtime.getURL('').replace(/\/$/, '');
+    return typeof url === 'string' && url.startsWith('blob:' + extensionOrigin + '/');
+  }
+
+  async function savePdf(request, sender) {
+    if (!trustedRenderer(sender)) throw new Error('Untrusted PDF save request.');
+    if (!trustedBlobUrl(request?.url)) throw new Error('Invalid generated PDF URL.');
+
+    const filename = sanitizeFilename(request.filename);
+    const downloadId = await chrome.downloads.download({
+      url: request.url,
+      filename,
+      conflictAction: 'uniquify',
+      saveAs: true
     });
+
+    if (!Number.isInteger(downloadId)) throw new Error('Chrome could not open the Save As dialog.');
+    return { ok: true, downloadId, filename };
   }
 
-  async function renderPdf(html, filename) {
-    let tab = null;
-    let attached = false;
-    try {
-      tab = await chrome.tabs.create({ url: 'about:blank', active: false });
-      if (!tab?.id) throw new Error('Could not create the PDF render tab.');
-
-      const debuggee = { tabId: tab.id };
-      await chrome.debugger.attach(debuggee, DEBUGGER_VERSION);
-      attached = true;
-
-      await chrome.debugger.sendCommand(debuggee, 'Page.enable');
-      await chrome.debugger.sendCommand(debuggee, 'Runtime.enable');
-
-      await chrome.debugger.sendCommand(debuggee, 'Runtime.evaluate', {
-        expression: 'document.open();document.write(' + JSON.stringify(String(html || '')) + ');document.close();true;',
-        returnByValue: true
-      });
-
-      await waitForDocument(debuggee);
-
-      const result = await chrome.debugger.sendCommand(debuggee, 'Page.printToPDF', {
-        printBackground: true,
-        preferCSSPageSize: true,
-        displayHeaderFooter: false,
-        generateTaggedPDF: true,
-        generateDocumentOutline: true,
-        transferMode: 'ReturnAsBase64'
-      });
-
-      if (!result?.data) throw new Error('Chrome did not return PDF data.');
-
-      const downloadId = await chrome.downloads.download({
-        url: 'data:application/pdf;base64,' + result.data,
-        filename: sanitizeFilename(filename),
-        conflictAction: 'uniquify',
-        saveAs: false
-      });
-
-      if (!Number.isInteger(downloadId)) throw new Error('Chrome could not start the PDF download.');
-      return { ok: true, downloadId, filename: sanitizeFilename(filename) };
-    } finally {
-      if (tab?.id) {
-        if (attached) {
-          try { await chrome.debugger.detach({ tabId: tab.id }); } catch {}
-        }
-        try { await chrome.tabs.remove(tab.id); } catch {}
-      }
-    }
-  }
-
-  chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
-    if (request?.type !== 'CGX_EXPORT_PDF') return;
-    renderPdf(request.html, request.filename)
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request?.type !== SAVE_MESSAGE) return;
+    savePdf(request, sender)
       .then(sendResponse)
-      .catch(error => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+      .catch(error => sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error)
+      }));
     return true;
   });
 })();
