@@ -32,6 +32,9 @@ test('service worker is a stateless offscreen/download bridge with durable watch
       async closeDocument() { closeCount += 1; offscreenExists = false; }
     },
     alarms: {
+      async get(name) {
+        return alarm?.name === name ? alarm : undefined;
+      },
       async clear(name) {
         const existed = alarm?.name === name;
         if (existed) alarm = null;
