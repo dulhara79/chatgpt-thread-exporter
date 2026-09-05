@@ -156,12 +156,14 @@
 
     while (i < lines.length) {
       const raw = lines[i];
-      const fence = raw.match(/^```\s*([^`]*)$/);
+      const fence = raw.match(/^\s*(\`{3,}|~{3,})\s*([^\`~]*)$/);
       if (fence) {
-        const lang = fence[1].trim();
+        const marker = fence[1];
+        const lang = fence[2].trim();
         const code = [];
         i += 1;
-        while (i < lines.length && !/^```\s*$/.test(lines[i])) {
+        const closePattern = marker[0] === '\`' ? /^\s*\`{3,}\s*$/ : /^\s*~{3,}\s*$/;
+        while (i < lines.length && !closePattern.test(lines[i])) {
           code.push(lines[i]);
           i += 1;
         }
@@ -716,6 +718,7 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
       if (!prepared?.ok) throw new Error(prepared?.error || 'Could not prepare the local PDF renderer.');
 
       options.onProgress?.({ jobId, stage: 'transfer', detail: String(definitionMetrics.definitionBytes) });
+      options.onProgress?.({ jobId, stage: 'rendering', detail: '' });
       const response = await Promise.race([
         chrome.runtime.sendMessage({
           target: 'cgx-offscreen-pdf',
