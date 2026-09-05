@@ -19,3 +19,21 @@ jobs:
           node-version: 24
       - run: npm test
       - run: npm run check
+
+
+  browser-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Locate Chrome
+        run: |
+          CHROME_PATH="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
+          test -n "$CHROME_PATH"
+          echo "CHROME_PATH=$CHROME_PATH" >> "$GITHUB_ENV"
+      - name: Install browser test driver
+        run: npm install --no-save --no-audit --no-fund puppeteer-core@24.16.0
+      - name: Run real Chromium extension smoke
+        run: xvfb-run -a node tests/browser-extension-smoke.mjs
