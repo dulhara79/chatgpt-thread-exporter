@@ -7,6 +7,7 @@
   const CLEANUP_MESSAGE = 'CGX_OFFSCREEN_RELEASE_PDF';
 
   let creatingOffscreen = null;
+  const pendingPdfUrls = new Map();
 
   function sanitizeFilename(name) {
     const cleaned = String(name || 'ChatGPT Conversation')
@@ -89,18 +90,34 @@
         throw new Error('Chrome could not open the Save As dialog.');
       }
 
+      pendingPdfUrls.set(downloadId, rendered.url);
+      setTimeout(async () => {
+        if (pendingPdfUrls.get(downloadId) !== rendered.url) return;
+        pendingPdfUrls.delete(downloadId);
+        await releasePdfUrl(rendered.url);
+      }, 5 * 60 * 1000);
+
       return {
         ok: true,
         downloadId,
         filename,
         bytes: rendered.bytes || 0
       };
-    } finally {
-      // The download API has already accepted the generated resource by this point.
-      // The offscreen renderer owns the object URL and releases it explicitly.
+    } catch (error) {
       await releasePdfUrl(rendered.url);
+      throw error;
     }
   }
+
+  chrome.downloads.onChanged.addListener(delta => {
+    if (!delta?.id || !delta.state?.current) return;
+    if (delta.state.current !== 'complete' && delta.state.current !== 'interrupted') return;
+
+    const url = pendingPdfUrls.get(delta.id);
+    if (!url) return;
+    pendingPdfUrls.delete(delta.id);
+    releasePdfUrl(url);
+  });
 
   chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     if (request?.type !== EXPORT_MESSAGE || request?.target === 'cgx-offscreen') return;
