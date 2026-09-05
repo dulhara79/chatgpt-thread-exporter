@@ -117,10 +117,28 @@
   // ---------------- Shared Markdown parser ----------------
 
   function parseTableRow(line) {
-    let s = line.trim();
-    if (s.startsWith('|')) s = s.slice(1);
-    if (s.endsWith('|')) s = s.slice(0, -1);
-    return s.split('|').map(cell => cell.trim());
+    let value = String(line || '').trim();
+    if (value.startsWith('|')) value = value.slice(1);
+    if (value.endsWith('|') && !value.endsWith('\\|')) value = value.slice(0, -1);
+    const cells = [];
+    let cell = '';
+    let escaped = false;
+    for (const char of value) {
+      if (escaped) {
+        cell += char === '|' ? '|' : '\\' + char;
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '|') {
+        cells.push(cell.trim());
+        cell = '';
+      } else {
+        cell += char;
+      }
+    }
+    if (escaped) cell += '\\';
+    cells.push(cell.trim());
+    return cells;
   }
 
   function isTableSeparator(line) {
@@ -476,8 +494,8 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
         tokenStyle.color = '#1E5A8A';
         tokenStyle.decoration = 'underline';
       } else if (token.type === 'math') {
-        tokenStyle.italics = true;
-        tokenStyle.color = '#243142';
+        runs.push({ text: '', cgxMathInline: { tex: token.text || '' } });
+        continue;
       }
 
       const tokenText = token.text || '';
@@ -529,26 +547,31 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
     const pushBlocks = markdown => {
       for (const block of parseMarkdownBlocks(markdown)) {
         if (block.type === 'blank') continue;
-        if (block.type === 'heading') {
+        const tokens = typeof block.text === 'string' ? parseInlineTokens(block.text) : [];
+        const displayMath = tokens.length === 1 && tokens[0].type === 'math' && tokens[0].display;
+        if (displayMath) {
+          content.push({ cgxMath: { tex: tokens[0].text || '', display: true } });
+        } else if (block.type === 'heading') {
           content.push(pdfTextNode(block.text, { style: block.level <= 2 ? 'h2' : 'h3', margin: [0, 8, 0, 5] }));
+          content.push(...pdfImageNodes(block.text));
         } else if (block.type === 'text') {
           const textNode = pdfTextNode(block.text, { margin: [0, 0, 0, 7], lineHeight: 1.28 });
-          if (Array.isArray(textNode.text) && textNode.text.some(run => run.text)) content.push(textNode);
+          if (Array.isArray(textNode.text) && textNode.text.some(run => run.text || run.cgxMathInline)) content.push(textNode);
           content.push(...pdfImageNodes(block.text));
         } else if (block.type === 'quote') {
-          content.push(pdfTextNode(block.text, { margin: [10, 4, 8, 8], color: '#405268', background: '#F8FAFC' }));
+          content.push({ stack: [pdfTextNode(block.text, { color: '#405268' }), ...pdfImageNodes(block.text)], margin: [10, 4, 8, 8], background: '#F8FAFC' });
         } else if (block.type === 'rule') {
           content.push({ canvas: [{ type: 'line', x1: 0, y1: 0, x2: 480, y2: 0, lineWidth: 0.5, lineColor: '#D1D5DB' }], margin: [0, 5, 0, 8] });
         } else if (block.type === 'code') {
           content.push(pdfPreformattedNode(block));
         } else if (block.type === 'list') {
-          const item = pdfTextNode(block.text);
+          const item = { stack: [pdfTextNode(block.text), ...pdfImageNodes(block.text)] };
           content.push(block.ordered
             ? { ol: [item], start: block.marker || 1, margin: [15, 0, 0, 5] }
             : { ul: [item], margin: [15, 0, 0, 5] });
         } else if (block.type === 'table') {
-          const rows = block.rows.map((row, rowIndex) => row.map(cell => pdfTextNode(cell, {
-            bold: rowIndex === 0,
+          const rows = block.rows.map((row, rowIndex) => row.map(cell => ({
+            stack: [pdfTextNode(cell, { bold: rowIndex === 0 }), ...pdfImageNodes(cell)],
             fillColor: rowIndex === 0 ? '#EEF3F8' : undefined,
             margin: [3, 3, 3, 3]
           })));
@@ -620,23 +643,45 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
       throw new Error('PDF export is only available inside the Chrome extension.');
     }
 
-    const timeoutMs = Math.max(30000, Number(options.timeoutMs || 60000));
-    let timeoutId;
+    const jobId = 'pdf-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+    const timeoutMs = Math.max(30000, Number(options.timeoutMs || 50000));
+    let timeoutId = null;
+    let timedOut = false;
 
-    const response = await Promise.race([
-      chrome.runtime.sendMessage({
-        type: 'CGX_EXPORT_PDF',
-        definition,
-        filename,
-        pageSize
-      }),
-      new Promise((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error('PDF generation timed out. Please try again.')), timeoutMs);
-      })
-    ]).finally(() => clearTimeout(timeoutId));
+    try {
+      const response = await Promise.race([
+        chrome.runtime.sendMessage({
+          type: 'CGX_EXPORT_PDF',
+          jobId,
+          definition,
+          filename,
+          pageSize
+        }),
+        new Promise((_, reject) => {
+          timeoutId = setTimeout(() => {
+            timedOut = true;
+            reject(new Error('PDF generation exceeded the safety deadline and was cancelled. Please retry.'));
+          }, timeoutMs);
+        })
+      ]);
 
-    if (!response?.ok) throw new Error(response?.error || 'PDF generation failed.');
-    return response;
+      if (!response?.ok) throw new Error(response?.error || 'PDF generation failed.');
+      if (response.jobId && response.jobId !== jobId) throw new Error('Received a stale PDF export response.');
+      return response;
+    } catch (error) {
+      if (timedOut) {
+        try {
+          await chrome.runtime.sendMessage({
+            type: 'CGX_CANCEL_PDF',
+            jobId,
+            reason: 'Caller safety deadline exceeded.'
+          });
+        } catch {}
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   // ---------------- DOCX / OOXML ----------------
@@ -775,9 +820,15 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
     const assets = [];
     for (const item of found.values()) {
       try {
-        const response = await fetch(item.src, { credentials: 'omit', referrerPolicy: 'no-referrer' });
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8000);
+        const response = await fetch(item.src, { credentials: 'omit', referrerPolicy: 'no-referrer', signal: controller.signal });
+        clearTimeout(timer);
         if (!response.ok) continue;
+        const declared = Number(response.headers.get('content-length') || 0);
+        if (declared > 8 * 1024 * 1024) continue;
         let blob = await response.blob();
+        if (blob.size > 8 * 1024 * 1024) continue;
         let type = String(blob.type || '').toLowerCase();
         let width = 1000;
         let height = 625;
