@@ -4,7 +4,7 @@ A local-only Chrome Manifest V3 extension for exporting ChatGPT conversations to
 
 ## V0.5.0 highlights
 
-- **PDF export keeps the hidden offscreen/direct-Save-As lifecycle** with no debugger or render tab. V0.3.9 removes the textual PNG fallback: multilingual text, emoji/symbols, code, and character diagrams remain selectable PDF text.
+- **PDF reliability is redesigned around an offscreen-owned render lifecycle.** The service worker is now a stateless offscreen/download bridge, a Chrome alarm hard-resets stuck pdfmake work, and the heavy PDF definition crosses runtime messaging only once. The selectable Unicode/diagram behavior from V0.3.9 is preserved.
 - PDF, Word, and Markdown actions now use consistent professional SVG document icons instead of text-letter badges.
 - Export one Q&A or the complete rendered conversation.
 - Every assistant answer gets a self-healing download/export control. If ChatGPT React re-renders an action row and removes the control, the extension inserts it again.
@@ -86,7 +86,7 @@ npm test
 npm run check
 ```
 
-The regression suite covers selectable multilingual font runs, the exact clinician architecture diagram as a preformatted node, bundled-font PDF generation, image/SVG handling, A4/Letter/Legal, DOCX behavior, and guards against debugger/tab/html2canvas or textual raster fallbacks.
+The regression suite covers renderer ownership, durable watchdog/reset behavior, payload preflight, selectable multilingual font runs, the exact clinician architecture diagram, image/SVG handling, A4/Letter/Legal, DOCX behavior, and guards against debugger/tab/html2canvas or textual raster fallbacks. CI also loads the unpacked extension in real Chromium and verifies that the actual MV3 offscreen pdfmake path produces a `%PDF` Blob.
 
 GitHub Actions runs the same checks on pull requests to `main`.
 
@@ -101,7 +101,7 @@ GitHub Actions runs the same checks on pull requests to `main`.
 
 The approved V0.3 design is documented at:
 
-`docs/superpowers/specs/2026-09-04-professional-export-rendering-design.md`
+`docs/superpowers/specs/2026-09-05-v050-renderer-owned-pdf-reliability-design.md`
 
 ## Third-party component
 
