@@ -61,7 +61,7 @@ try {
       content:[{
         text:[
           { text:'English ' },
-          { text:'සිංහල පරීක්ෂණය', cgxFont:'sinhala' }
+          { text:'සිංහල පරීක්ෂණය', cgxFont:'sinhala', fontFeatures:[] }
         ]
       }]
     };
