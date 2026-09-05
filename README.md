@@ -1,11 +1,11 @@
-# ChatGPT Thread Exporter — V0.3.8
+# ChatGPT Thread Exporter — V0.3.9
 
 A local-only Chrome Manifest V3 extension for exporting ChatGPT conversations to professional PDF, Microsoft Word (`.docx`), and Markdown.
 
-## V0.3.8 highlights
+## V0.3.9 highlights
 
 - **Long-thread PDF generation is now chunked by Q&A/answer blocks** instead of rasterizing the entire conversation into one giant canvas. This keeps memory bounded and substantially reduces export time for large conversations.
-- **PDF export now uses a hidden offscreen vector renderer**. It no longer uses `chrome.debugger`, `Page.printToPDF`, temporary render tabs, html2canvas, or whole-page screenshots.
+- **PDF text is now selectable/copyable end-to-end.** Sinhala, Tamil, Korean, emoji, box-drawing characters, and code use embedded script-aware fonts instead of text-to-image fallbacks.\n- **ASCII/box diagrams stay text diagrams** with a dedicated embedded monospace font, preserved leading/trailing spaces, preserved newlines, no wrapping, and automatic shrink-to-fit sizing.\n- **PDF export keeps the hidden offscreen/direct-save architecture** from V0.3.8: no debugger notification, no temporary tab, and repeated exports work without refreshing.
 - PDF, Word, and Markdown actions now use consistent professional SVG document icons instead of text-letter badges.
 - Export one Q&A or the complete rendered conversation.
 - Every assistant answer gets a self-healing download/export control. If ChatGPT React re-renders an action row and removes the control, the extension inserts it again.
@@ -47,7 +47,7 @@ Use the **Export** control beside the conversation header Share action. The exte
 
 ### PDF
 
-PDFs are generated locally inside an MV3 offscreen document using a bundled browser-side vector PDF engine. Normal text, lists, tables, headings, code, rules, and document structure are emitted semantically; complex-script fallback is rasterized only at the individual paragraph/element level so the extension never screenshots the full page or full conversation. The worker returns a Blob URL to the service worker, which immediately opens Chrome's native **Save As** dialog with `saveAs: true`; the suggested filename is the conversation title and A4 remains the default page size.
+PDFs are generated locally inside an MV3 offscreen document using a bundled browser-side vector PDF engine. Text remains real PDF text, including Sinhala, Tamil, Korean, emoji, code, and character-based diagrams. The renderer uses embedded Noto script fonts and a dedicated Noto Sans Mono subset for preformatted diagrams. Only inherently graphical assets such as unsupported SVG graphics may be rasterized; ordinary text is never converted to a bitmap. The worker returns a Blob URL to the service worker, which immediately opens Chrome's native **Save As** dialog with `saveAs: true`; the suggested filename is the conversation title and A4 remains the default page size.
 
 ### Word (.docx)
 
@@ -87,7 +87,7 @@ npm test
 npm run check
 ```
 
-The regression suite covers metadata removal, ordered list sequence, A4/Letter/Legal, favicon filtering, multilingual Unicode/emoji, TeX preservation, DOCX numbering/page geometry, and guards that enforce the debugger-free offscreen vector PDF path, repeat-safe export menu lifecycle, and prevent reintroducing whole-document raster export.
+The regression suite covers metadata removal, ordered list sequence, A4/Letter/Legal, favicon filtering, multilingual Unicode/emoji, TeX preservation, DOCX numbering/page geometry, selectable PDF font routing, exact character diagrams, image/SVG handling, and guards that prevent reintroducing debugger/tab export or text rasterization. CI also generates a real PDF and extracts its text to verify multilingual copy/paste and the architecture diagram.
 
 GitHub Actions runs the same checks on pull requests to `main`.
 
@@ -106,7 +106,7 @@ The approved V0.3 design is documented at:
 
 ## Third-party component
 
-V0.3.8 bundles pdfmake 0.2.20 and its Roboto virtual font files for local PDF generation. html2pdf.js/html2canvas are not used for PDF export.
+V0.3.9 bundles pdfmake 0.2.20, Roboto, and subsetted open-source Noto fonts for Sinhala, Tamil, Korean, emoji/symbols, and monospace diagrams. html2pdf.js/html2canvas are not used for PDF export.
 
 ## Version
 
