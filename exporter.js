@@ -413,7 +413,7 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
 </html>`;
   }
 
-  function pdfFontForCodePoint(codePoint, previousFont = 'Roboto') {
+  function pdfFontForCodePoint(codePoint, previousFont = 'NotoSans') {
     if (codePoint >= 0x0D80 && codePoint <= 0x0DFF) return 'NotoSinhala';
     if (codePoint >= 0x0B80 && codePoint <= 0x0BFF) return 'NotoTamil';
     if (
@@ -434,13 +434,13 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
       codePoint === 0x200D ||
       codePoint === 0xFE0F
     ) return previousFont;
-    return 'Roboto';
+    return 'NotoSans';
   }
 
   function splitPdfFontRuns(text, base = {}) {
     const runs = [];
     let current = '';
-    let currentFont = base.font || 'Roboto';
+    let currentFont = base.font || 'NotoSans';
 
     const flush = () => {
       if (!current) return;
@@ -677,7 +677,7 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
       pageSize,
       pageMargins: [51, 51, 51, 55],
       info: { title, subject: 'ChatGPT conversation export', creator: APP_NAME },
-      defaultStyle: { font: 'Roboto', fontSize: 10.5, color: '#243142', lineHeight: 1.24 },
+      defaultStyle: { font: 'NotoSans', fontSize: 10.5, color: '#243142', lineHeight: 1.24 },
       styles: {
         title: { fontSize: 23, bold: true, color: '#183B56' },
         h2: { fontSize: 14, bold: true, color: '#183B56' },
