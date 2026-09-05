@@ -5,7 +5,7 @@ A local-only Chrome Manifest V3 extension for exporting ChatGPT conversations to
 ## V0.3.7 highlights
 
 - **Long-thread PDF generation is now chunked by Q&A/answer blocks** instead of rasterizing the entire conversation into one giant canvas. This keeps memory bounded and substantially reduces export time for large conversations.
-- PDF export continues to use an MV3 offscreen document with native Save As, no debugger banner, no visible tab, and no print preview.
+- **PDF export now uses Chrome's native print engine** instead of html2canvas rasterization, which is the critical performance fix for long conversations.
 - PDF, Word, and Markdown actions now use consistent professional SVG document icons instead of text-letter badges.
 - Export one Q&A or the complete rendered conversation.
 - Every assistant answer gets a self-healing download/export control. If ChatGPT React re-renders an action row and removes the control, the extension inserts it again.
@@ -87,7 +87,7 @@ npm test
 npm run check
 ```
 
-The regression suite covers metadata removal, ordered list sequence, A4/Letter/Legal, favicon filtering, multilingual Unicode/emoji, TeX preservation, DOCX numbering/page geometry, and a hard guard against reintroducing debugger/print-preview PDF export.
+The regression suite covers metadata removal, ordered list sequence, A4/Letter/Legal, favicon filtering, multilingual Unicode/emoji, TeX preservation, DOCX numbering/page geometry, and guards that enforce the native Chrome PDF path and prevent reintroducing html2canvas raster export.
 
 GitHub Actions runs the same checks on pull requests to `main`.
 
