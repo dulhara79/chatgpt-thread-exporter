@@ -154,7 +154,7 @@ test('PDF export uses an offscreen vector worker with direct Save As and no debu
   assert.match(backgroundSource, /pdf-worker\.html/);
   assert.match(backgroundSource, /chrome\.downloads\.download/);
   assert.match(backgroundSource, /saveAs: true/);
-  assert.match(backgroundSource, /renderQueue/);
+  assert.match(backgroundSource, /jobQueue/);
   assert.match(workerSource, /pdfMake\.createPdf/);
   assert.match(workerSource, /URL\.createObjectURL/);
 
