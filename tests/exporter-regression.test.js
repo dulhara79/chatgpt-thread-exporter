@@ -141,80 +141,46 @@ test('DOCX equations use native OMML structures', async () => {
   assert.match(raw, /<m:sSup>/);
 });
 
-test('PDF export uses MV3 offscreen rendering and native Save As without iframe/debugger paths', () => {
+test('PDF export uses Chrome native printToPDF and native Save As', () => {
   const exporterSource = fs.readFileSync(require.resolve('../exporter.js'), 'utf8');
   const backgroundSource = fs.readFileSync(require.resolve('../background.js'), 'utf8');
-  const rendererSource = fs.readFileSync(require.resolve('../pdf-renderer.js'), 'utf8');
-  const contentSource = fs.readFileSync(require.resolve('../content.js'), 'utf8');
   const manifest = JSON.parse(fs.readFileSync(require.resolve('../manifest.json'), 'utf8'));
 
   assert.match(exporterSource, /CGX_EXPORT_PDF/);
-  assert.doesNotMatch(exporterSource, /createElement\(['"]iframe['"]\)|postMessage\(/);
-
-  assert.match(backgroundSource, /chrome\.offscreen\.createDocument/);
-  assert.match(backgroundSource, /OFFSCREEN_DOCUMENT/);
+  assert.match(backgroundSource, /Page\.printToPDF/);
+  assert.match(backgroundSource, /Page\.setDocumentContent/);
+  assert.match(backgroundSource, /chrome\.debugger\.attach/);
   assert.match(backgroundSource, /chrome\.downloads\.download/);
   assert.match(backgroundSource, /saveAs: true/);
-  assert.match(backgroundSource, /chrome\.downloads\.onChanged/);
+  assert.match(backgroundSource, /active: false/);
+  assert.match(backgroundSource, /renderQueue/);
 
-  assert.match(rendererSource, /CGX_OFFSCREEN_RENDER_PDF/);
-  assert.match(rendererSource, /html2pdf/);
-  assert.match(rendererSource, /URL\.createObjectURL/);
-
-  assert.equal(manifest.permissions.includes('offscreen'), true);
-  assert.equal(manifest.permissions.includes('debugger'), false);
+  assert.equal(manifest.permissions.includes('debugger'), true);
+  assert.equal(manifest.permissions.includes('tabs'), true);
   assert.equal(manifest.permissions.includes('downloads'), true);
-  assert.equal('web_accessible_resources' in manifest, false);
+  assert.equal(manifest.permissions.includes('offscreen'), false);
 
-  assert.doesNotMatch(
-    exporterSource + backgroundSource + rendererSource,
-    /chrome\.debugger|Page\.printToPDF|about:blank|window\.print\(|\.print\(\)/
-  );
-
-  assert.match(contentSource, /cgx-format-icon/);
-  assert.match(contentSource, /<svg/);
-  assert.doesNotMatch(contentSource, /cgx-format-badge[^\n]*>PDF<|cgx-format-badge[^\n]*>W<|cgx-format-badge[^\n]*>MD</);
+  assert.doesNotMatch(backgroundSource, /html2pdf|html2canvas|toCanvas|toDataURL\(['"]image\/jpeg/);
 });
-
-
-test('long-thread PDF rendering is chunked instead of rasterizing the full document canvas', () => {
-  const rendererSource = fs.readFileSync(require.resolve('../pdf-renderer.js'), 'utf8');
-
-  assert.match(rendererSource, /collectRenderUnits/);
-  assert.match(rendererSource, /splitLargeSection/);
-  assert.match(rendererSource, /renderBatchCanvas/);
-  assert.match(rendererSource, /appendCanvas/);
-  assert.match(rendererSource, /MAX_SECTION_PX/);
-  assert.match(rendererSource, /renderScale/);
-  assert.match(rendererSource, /canvas\.width = 1/);
-  assert.match(rendererSource, /canvas\.height = 1/);
-
-  assert.doesNotMatch(rendererSource, /\.from\(element\)\s*\.toPdf\(\)/);
-  assert.doesNotMatch(rendererSource, /cleanRenderDocument\(html\)[\s\S]{0,600}\.from\(main\)/);
+test('long-thread PDF export does not use raster chunking', () => {
+  const backgroundSource = fs.readFileSync(require.resolve('../background.js'), 'utf8');
+  assert.match(backgroundSource, /Page\.printToPDF/);
+  assert.doesNotMatch(backgroundSource, /collectRenderUnits|splitLargeSection|renderBatchCanvas|appendCanvas|MAX_BATCH_PX/);
 });
-
 test('A4 remains the default PDF page size', () => {
   assert.equal(exporter.normalizePageSize(), 'A4');
   assert.match(exporter.buildPrintHtml(data, turns), /size: A4/);
 });
 
 
-test('V0.3.6 PDF renderer removes the full conversation before canvas capture and batches bounded units', () => {
-  const rendererSource = fs.readFileSync(require.resolve('../pdf-renderer.js'), 'utf8');
-
-  assert.match(rendererSource, /packRenderBatches/);
-  assert.match(rendererSource, /MAX_BATCH_PX/);
-  assert.match(rendererSource, /MAX_BATCH_UNITS/);
-  assert.match(rendererSource, /root\.replaceChildren\(\);[\s\S]{0,300}const scale = renderScale/);
-  assert.match(rendererSource, /renderBatchCanvas/);
-  assert.match(rendererSource, /renderBatchWithFallback/);
-  assert.match(rendererSource, /RENDER_WATCHDOG_MS/);
-  assert.match(rendererSource, /withWatchdog/);
-  assert.match(rendererSource, /root\.replaceChildren\(element\)/);
-  assert.match(rendererSource, /root\.replaceChildren\(\)/);
-  assert.doesNotMatch(rendererSource, /renderUnitCanvas/);
+test('V0.3.7 native PDF engine is single-pass and removes raster renderer dependencies', () => {
+  const backgroundSource = fs.readFileSync(require.resolve('../background.js'), 'utf8');
+  assert.match(backgroundSource, /generateTaggedPDF: true/);
+  assert.match(backgroundSource, /generateDocumentOutline: true/);
+  assert.match(backgroundSource, /preferCSSPageSize: true/);
+  assert.match(backgroundSource, /ReturnAsBase64/);
+  assert.doesNotMatch(backgroundSource, /html2pdf|html2canvas|canvas\.toDataURL|pdf\.addImage/);
 });
-
 test('PDF caller has a bounded wait instead of an indefinite Preparing PDF state', () => {
   const exporterSource = fs.readFileSync(require.resolve('../exporter.js'), 'utf8');
   assert.match(exporterSource, /Promise\.race/);
