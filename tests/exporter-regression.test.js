@@ -182,7 +182,7 @@ test('long-thread PDF rendering is chunked instead of rasterizing the full docum
 
   assert.match(rendererSource, /collectRenderUnits/);
   assert.match(rendererSource, /splitLargeSection/);
-  assert.match(rendererSource, /renderUnitCanvas/);
+  assert.match(rendererSource, /renderBatchCanvas/);
   assert.match(rendererSource, /appendCanvas/);
   assert.match(rendererSource, /MAX_SECTION_PX/);
   assert.match(rendererSource, /renderScale/);
