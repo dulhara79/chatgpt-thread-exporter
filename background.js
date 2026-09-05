@@ -202,7 +202,7 @@
           job.resolve(result);
         } catch (error) {
           job.settled = true;
-          job.reject(error);
+          job.reject(job.cancelled ? cancelledError(job.cancelReason) : error);
         } finally {
           jobs.delete(job.id);
           if (runningJob === job) runningJob = null;
