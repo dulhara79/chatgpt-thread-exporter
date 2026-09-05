@@ -5,9 +5,6 @@ const path = require('node:path');
 
 test('bundled Unicode PDF fonts generate a real selectable-font PDF', async () => {
   const pdfMake = require('../vendor/pdfmake.min.js');
-  const baseVfs = require('../vendor/vfs_fonts.js');
-  pdfMake.addVirtualFileSystem(baseVfs);
-
   const files = {
     'NotoSansSinhala-Regular.ttf': 'vendor/fonts/NotoSansSinhala-Regular.ttf',
     'NotoSansTamil-Regular.ttf': 'vendor/fonts/NotoSansTamil-Regular.ttf',
@@ -27,12 +24,6 @@ test('bundled Unicode PDF fonts generate a real selectable-font PDF', async () =
 
   const one = name => ({ normal:name, bold:name, italics:name, bolditalics:name });
   pdfMake.fonts = {
-    Roboto: {
-      normal:'Roboto-Regular.ttf',
-      bold:'Roboto-Medium.ttf',
-      italics:'Roboto-Italic.ttf',
-      bolditalics:'Roboto-MediumItalic.ttf'
-    },
     NotoSinhala: one('NotoSansSinhala-Regular.ttf'),
     NotoTamil: one('NotoSansTamil-Regular.ttf'),
     NotoKorean: one('NotoSansKR-Regular.woff2'),
@@ -42,9 +33,10 @@ test('bundled Unicode PDF fonts generate a real selectable-font PDF', async () =
   };
 
   const doc = {
+    defaultStyle: { font: 'NotoMono' },
     content: [{
       text: [
-        { text:'English ', font:'Roboto' },
+        { text:'English ', font:'NotoMono' },
         { text:'සිංහල ', font:'NotoSinhala' },
         { text:'தமிழ் ', font:'NotoTamil' },
         { text:'한국어 ', font:'NotoKorean' },
