@@ -1,8 +1,8 @@
-# ChatGPT Thread Exporter — V0.3.9
+# ChatGPT Thread Exporter — V0.5.0
 
 A local-only Chrome Manifest V3 extension for exporting ChatGPT conversations to professional PDF, Microsoft Word (`.docx`), and Markdown.
 
-## V0.3.9 highlights
+## V0.5.0 highlights
 
 - **PDF export keeps the hidden offscreen/direct-Save-As lifecycle** with no debugger or render tab. V0.3.9 removes the textual PNG fallback: multilingual text, emoji/symbols, code, and character diagrams remain selectable PDF text.
 - PDF, Word, and Markdown actions now use consistent professional SVG document icons instead of text-letter badges.
@@ -46,7 +46,7 @@ Use the **Export** control beside the conversation header Share action. The exte
 
 ### PDF
 
-PDFs are generated locally inside an MV3 offscreen document using a bundled browser-side vector PDF engine. Text is split into script-aware runs and mapped to bundled fonts; code and character diagrams use a dedicated monospace no-wrap path, so ordinary content remains selectable/copyable. Supported SVG stays vector, while only unsupported graphical SVG assets may be rasterized. The worker returns a Blob URL to the service worker, which opens Chrome's native **Save As** dialog with `saveAs: true`; the suggested filename is the conversation title and A4 remains the default page size.
+PDFs are generated locally inside an MV3 offscreen document using a bundled browser-side vector PDF engine. Text is split into script-aware runs and mapped to bundled fonts; code and character diagrams use a dedicated monospace no-wrap path, so ordinary content remains selectable/copyable. Supported SVG stays vector, while only unsupported graphical SVG assets may be rasterized. The offscreen renderer owns each PDF job and Blob URL. The service worker is a stateless offscreen/download bridge, with a browser-alarm watchdog that destroys a stuck renderer. Chrome then opens native **Save As** with `saveAs: true`; the suggested filename is the conversation title and A4 remains the default page size.
 
 ### Word (.docx)
 
@@ -105,8 +105,8 @@ The approved V0.3 design is documented at:
 
 ## Third-party component
 
-V0.3.9 bundles pdfmake 0.2.20 plus local open-source Noto fonts for Sinhala, Tamil, Korean, symbols/emoji, and monospace text. html2pdf.js/html2canvas are not used for PDF export.
+V0.5.0 bundles pdfmake 0.2.20 plus local open-source Noto fonts for Sinhala, Tamil, Korean, symbols/emoji, and monospace text. html2pdf.js/html2canvas are not used for PDF export.
 
 ## Version
 
-V0.3.9
+V0.5.0
