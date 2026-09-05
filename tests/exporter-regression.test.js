@@ -306,3 +306,9 @@ test('PDF render protocol never holds one message response open for pdfmake', ()
   assert.match(workerSource, /sendResponse\(acceptJob\(request, false\)\)/);
   assert.doesNotMatch(workerSource, /renderPdf\(request\)\s*\.then\(sendResponse\)/);
 });
+
+
+test('bundled pdfmake guards missing GPOS anchors for Indic fonts', () => {
+  const pdfmake = fs.readFileSync(require.resolve('../vendor/pdfmake.min.js'), 'utf8');
+  assert.match(pdfmake, /getAnchor\(r\)\{if\(!r\)return\{x:0,y:0\}/);
+});
