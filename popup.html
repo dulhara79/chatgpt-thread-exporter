@@ -34,7 +34,13 @@
     .q { font-size: 12px; font-weight: 700; line-height: 1.35; margin-bottom: 4px; }
     .a { font-size: 11px; color: #6b6c70; line-height: 1.35; }
     .formats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
-    .formats button { padding: 10px 6px; }
+    .formats button { min-height: 70px; padding: 9px 7px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; }
+    .format-mark { width:30px; height:30px; display:inline-flex; align-items:center; justify-content:center; border-radius:9px; border:1px solid transparent; }
+    .format-mark svg { width:19px; height:19px; fill:none; stroke:currentColor; stroke-width:1.55; stroke-linecap:round; stroke-linejoin:round; }
+    .format-pdf { color:#b42318; background:#fff2f0; border-color:#f7c9c5; }
+    .format-docx { color:#185abd; background:#edf5ff; border-color:#bfd7fb; }
+    .format-md { color:#334155; background:#f1f5f9; border-color:#d6dde6; }
+    .format-label { font-size:11px; font-weight:700; }
     footer { font-size: 10px; color: #85868a; margin-top: 10px; text-align: center; }
   </style>
 </head>
@@ -57,11 +63,11 @@
     </div>
     <div id="turns" class="turns"></div>
     <div class="formats">
-      <button id="md" class="primary">Markdown</button>
-      <button id="docx">Word .docx</button>
-      <button id="pdf">PDF</button>
+      <button id="md"><span class="format-mark format-md"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 3.25h13v17.5h-13z"/><path d="M8 9.1v5.8M8 9.1l2.1 2.7 2.1-2.7v5.8M14.1 11.1l1.9 2.25 1.9-2.25M16 13.35V9.1"/></svg></span><span class="format-label">Markdown</span></button>
+      <button id="docx"><span class="format-mark format-docx"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.1 2.75h7.1l4.25 4.25v14.25H7.1z"/><path d="M14.2 2.75V7h4.25"/><path d="M4.1 9.2h6.9v9.2H4.1z"/><path d="m5.6 11 1.25 5.5 1.2-3.75 1.2 3.75L10.5 11"/></svg></span><span class="format-label">Word</span></button>
+      <button id="pdf"><span class="format-mark format-pdf"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.75 2.75h7.2L18.5 7.3v13.95H6.75z"/><path d="M13.95 2.75V7.3h4.55"/><path d="M8.8 14.75h6.4M8.8 17.25h4.7"/></svg></span><span class="format-label">PDF</span></button>
     </div>
-    <footer>V0.3.3 · Save As PDF · native equations · local-only</footer>
+    <footer>V0.3.4 · reliable Save As PDF · local-only</footer>
   </main>
   <script src="math.js"></script>
   <script src="exporter.js"></script>
