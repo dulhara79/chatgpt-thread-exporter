@@ -2,21 +2,10 @@
   'use strict';
 
   const APP_NAME = 'ChatGPT Thread Exporter';
-  const MESSAGE_RENDER = 'CGX_RENDER_PDF';
-  const MESSAGE_RESULT = 'CGX_RENDER_PDF_RESULT';
-  const SAVE_MESSAGE = 'CGX_SAVE_PDF';
+  const RENDER_MESSAGE = 'CGX_OFFSCREEN_RENDER_PDF';
+  const CLEANUP_MESSAGE = 'CGX_OFFSCREEN_RELEASE_PDF';
   const root = document.getElementById('render-root');
-
-  function extensionOrigin() {
-    try { return new URL(chrome.runtime.getURL('/')).origin; }
-    catch { return ''; }
-  }
-
-  function allowedParent(origin) {
-    return origin === extensionOrigin() ||
-      origin === 'https://chatgpt.com' ||
-      origin === 'https://chat.openai.com';
-  }
+  const activeUrls = new Set();
 
   function normalizePageSize(value) {
     const key = String(value || 'A4').toLowerCase();
@@ -67,7 +56,7 @@
         };
         image.addEventListener('load', done, { once: true });
         image.addEventListener('error', done, { once: true });
-        setTimeout(done, 12000);
+        setTimeout(done, 8000);
       });
     }));
 
@@ -112,8 +101,8 @@
           allowTaint: false,
           backgroundColor: '#ffffff',
           logging: false,
-          imageTimeout: 15000,
-          foreignObjectRendering: true
+          imageTimeout: 10000,
+          foreignObjectRendering: false
         },
         jsPDF: {
           unit: 'mm',
@@ -142,47 +131,53 @@
     });
 
     const blob = await worker.outputPdf('blob');
-    if (!(blob instanceof Blob) || blob.size === 0) throw new Error('The PDF engine returned an empty file.');
-
-    const objectUrl = URL.createObjectURL(blob);
-    try {
-      const response = await chrome.runtime.sendMessage({
-        type: SAVE_MESSAGE,
-        url: objectUrl,
-        filename: String(filename || 'ChatGPT Conversation')
-      });
-      if (!response?.ok) throw new Error(response?.error || 'Chrome could not open the Save As dialog.');
-      return {
-        ok: true,
-        filename: response.filename,
-        downloadId: response.downloadId,
-        bytes: blob.size
-      };
-    } finally {
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+    if (!(blob instanceof Blob) || blob.size === 0) {
+      throw new Error('The PDF engine returned an empty file.');
     }
+
+    const url = URL.createObjectURL(blob);
+    activeUrls.add(url);
+
+    // Safety cleanup if the background worker is interrupted before releasing it.
+    setTimeout(() => {
+      if (!activeUrls.delete(url)) return;
+      URL.revokeObjectURL(url);
+    }, 5 * 60 * 1000);
+
+    return {
+      ok: true,
+      url,
+      bytes: blob.size
+    };
   }
 
-  window.addEventListener('message', async event => {
-    if (event.source !== window.parent || !allowedParent(event.origin)) return;
-    const request = event.data;
-    if (request?.type !== MESSAGE_RENDER || typeof request.requestId !== 'string') return;
+  function releaseUrl(url) {
+    if (!activeUrls.delete(url)) return false;
+    URL.revokeObjectURL(url);
+    return true;
+  }
 
-    const target = event.source;
-    const targetOrigin = event.origin;
-    try {
-      const result = await renderPdf(request);
-      target.postMessage({ type: MESSAGE_RESULT, requestId: request.requestId, ...result }, targetOrigin);
-    } catch (error) {
-      target.postMessage({
-        type: MESSAGE_RESULT,
-        requestId: request.requestId,
+  chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+    if (request?.target !== 'cgx-offscreen') return;
+
+    if (request.type === CLEANUP_MESSAGE) {
+      sendResponse({ ok: true, released: releaseUrl(request.url) });
+      return;
+    }
+
+    if (request.type !== RENDER_MESSAGE) return;
+
+    renderPdf(request)
+      .then(sendResponse)
+      .catch(error => sendResponse({
         ok: false,
         error: error instanceof Error ? error.message : String(error)
-      }, targetOrigin);
-    } finally {
-      root.replaceChildren();
-      document.querySelectorAll('style[data-cgx-pdf-style]').forEach(node => node.remove());
-    }
+      }))
+      .finally(() => {
+        root.replaceChildren();
+        document.querySelectorAll('style[data-cgx-pdf-style]').forEach(node => node.remove());
+      });
+
+    return true;
   });
 })();
