@@ -61,16 +61,8 @@ try {
       content:[{
         text:[
           { text:'English ' },
-          { text:'සිංහල ', cgxFont:'sinhala' },
-          { text:'தமிழ் ', cgxFont:'tamil' },
-          { text:'→ ✓', cgxFont:'symbols' }
+          { text:'සිංහල පරීක්ෂණය', cgxFont:'sinhala' }
         ]
-      }, {
-        cgxPreformatted:{
-          text:'Clinician App\\n    |\\n    v\\nCentral Backend',
-          diagram:true,
-          language:'text'
-        }
       }]
     };
     return chrome.runtime.sendMessage({
