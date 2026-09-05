@@ -4,6 +4,9 @@
   const APP_NAME = 'ChatGPT Thread Exporter';
   const MIME_DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   const mathRenderer = globalThis.ChatGPTMath || null;
+  const MAX_PDF_SOURCE_BYTES = 24 * 1024 * 1024;
+  const MAX_PDF_DEFINITION_BYTES = 36 * 1024 * 1024;
+  const MAX_PDF_DEFINITION_NODES = 120000;
 
   const PAGE_SIZES = Object.freeze({
     A4: { css: 'A4', width: 11906, height: 16838 },
@@ -153,12 +156,14 @@
 
     while (i < lines.length) {
       const raw = lines[i];
-      const fence = raw.match(/^```\s*([^`]*)$/);
+      const fence = raw.match(/^\s*(\`{3,}|~{3,})\s*([^\`~]*)$/);
       if (fence) {
-        const lang = fence[1].trim();
+        const marker = fence[1];
+        const lang = fence[2].trim();
         const code = [];
         i += 1;
-        while (i < lines.length && !/^```\s*$/.test(lines[i])) {
+        const closePattern = marker[0] === '\`' ? /^\s*\`{3,}\s*$/ : /^\s*~{3,}\s*$/;
+        while (i < lines.length && !closePattern.test(lines[i])) {
           code.push(lines[i]);
           i += 1;
         }
@@ -634,53 +639,163 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
     };
   }
 
-  async function exportPdf(data, turns, options = {}) {
-    const pageSize = normalizePageSize(options.pageSize || 'A4');
-    const definition = buildPdfDefinition(data, turns, { ...options, pageSize });
-    const filename = safeFilename(data?.title || 'ChatGPT Conversation');
+  function jsonByteLength(value) {
+    const json = JSON.stringify(value);
+    return new TextEncoder().encode(json).length;
+  }
 
+  function countPdfNodes(node) {
+    if (Array.isArray(node)) return 1 + node.reduce((sum, item) => sum + countPdfNodes(item), 0);
+    if (!node || typeof node !== 'object') return 1;
+    return 1 + Object.values(node).reduce((sum, value) => sum + countPdfNodes(value), 0);
+  }
+
+  function preflightPdfSource(data, turns) {
+    const bytes = jsonByteLength({
+      title: data?.title || '',
+      turns: turns || []
+    });
+    if (bytes > MAX_PDF_SOURCE_BYTES) {
+      throw new Error('This conversation is too large to export safely as one PDF. Remove very large embedded images/diagrams or export fewer Q&A turns.');
+    }
+    return { sourceBytes: bytes };
+  }
+
+  function preflightPdfDefinition(definition) {
+    const bytes = jsonByteLength(definition);
+    const nodes = countPdfNodes(definition);
+    if (bytes > MAX_PDF_DEFINITION_BYTES) {
+      throw new Error('The generated PDF definition is too large for Chrome extension messaging. Export fewer Q&A turns or remove very large embedded diagrams.');
+    }
+    if (nodes > MAX_PDF_DEFINITION_NODES) {
+      throw new Error('The conversation contains too many document elements for a reliable single PDF export. Export a smaller selection.');
+    }
+    return { definitionBytes: bytes, definitionNodes: nodes };
+  }
+
+  async function resetPdfRenderer() {
+    try {
+      await Promise.race([
+        chrome.runtime.sendMessage({ type: 'CGX_RESET_PDF_WORKER' }),
+        new Promise(resolve => setTimeout(resolve, 4000))
+      ]);
+    } catch {}
+  }
+
+  function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  async function shortRuntimeMessage(message, timeoutMs = 1200) {
+    const marker = Symbol('timeout');
+    const result = await Promise.race([
+      chrome.runtime.sendMessage(message).catch(error => ({ __cgxError:error })),
+      delay(timeoutMs).then(() => marker)
+    ]);
+    if (result === marker) return { timedOut:true };
+    if (result?.__cgxError) throw result.__cgxError;
+    return { timedOut:false, response:result };
+  }
+
+  async function waitForPdfJob(jobId, overallTimeoutMs, options = {}) {
+    const startedAt = Date.now();
+    let lastStage = '';
+    while (Date.now() - startedAt < overallTimeoutMs) {
+      const check = await shortRuntimeMessage({
+        target:'cgx-offscreen-pdf',
+        type:'CGX_OFFSCREEN_PDF_STATUS',
+        jobId
+      }, 1000).catch(() => ({ timedOut:true }));
+
+      if (!check.timedOut && check.response?.found) {
+        const state = check.response.state || '';
+        if (state && state !== lastStage) {
+          lastStage = state;
+          try { options.onProgress?.({ jobId, stage:state, detail:'' }); } catch {}
+        }
+        if (state === 'done') return check.response.result;
+        if (state === 'error') {
+          throw new Error(check.response.error || 'The local PDF renderer failed.');
+        }
+      }
+
+      await delay(1250);
+    }
+    throw new Error('PDF rendering exceeded the safety deadline. The renderer was reset so the next export can start cleanly.');
+  }
+
+  async function exportPdf(data, turns, options = {}) {
     if (!globalThis.chrome?.runtime?.sendMessage) {
       throw new Error('PDF export is only available inside the Chrome extension.');
     }
 
+    const sourceMetrics = preflightPdfSource(data, turns);
+    const pageSize = normalizePageSize(options.pageSize || 'A4');
+    const definition = buildPdfDefinition(data, turns, { ...options, pageSize });
+    const definitionMetrics = preflightPdfDefinition(definition);
+    const filename = safeFilename(data?.title || 'ChatGPT Conversation');
     const jobId = 'pdf-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
     const timeoutMs = Math.max(30000, Number(options.timeoutMs || 50000));
-    let timeoutId = null;
-    let timedOut = false;
+
+    const progressListener = request => {
+      if (request?.type !== 'CGX_PDF_PROGRESS' || request.jobId !== jobId) return;
+      try {
+        options.onProgress?.({
+          jobId,
+          stage:request.stage || '',
+          detail:request.detail || ''
+        });
+      } catch {}
+    };
+    chrome.runtime.onMessage.addListener(progressListener);
 
     try {
-      const response = await Promise.race([
-        chrome.runtime.sendMessage({
-          type: 'CGX_EXPORT_PDF',
-          jobId,
-          definition,
-          filename,
-          pageSize
-        }),
-        new Promise((_, reject) => {
-          timeoutId = setTimeout(() => {
-            timedOut = true;
-            reject(new Error('PDF generation exceeded the safety deadline and was cancelled. Please retry.'));
-          }, timeoutMs);
-        })
-      ]);
+      options.onProgress?.({ jobId, stage:'preflight', detail:String(definitionMetrics.definitionBytes) });
+      const prepared = await chrome.runtime.sendMessage({
+        type:'CGX_PREPARE_PDF_WORKER',
+        jobId
+      });
+      if (!prepared?.ok) {
+        throw new Error(prepared?.error || 'Could not prepare the local PDF renderer.');
+      }
 
-      if (!response?.ok) throw new Error(response?.error || 'PDF generation failed.');
-      if (response.jobId && response.jobId !== jobId) throw new Error('Received a stale PDF export response.');
-      return response;
+      options.onProgress?.({ jobId, stage:'transfer', detail:String(definitionMetrics.definitionBytes) });
+      const accepted = await chrome.runtime.sendMessage({
+        target:'cgx-offscreen-pdf',
+        type:'CGX_OFFSCREEN_START_PDF',
+        jobId,
+        definition,
+        filename,
+        pageSize,
+        metrics:{
+          ...sourceMetrics,
+          ...definitionMetrics
+        }
+      });
+
+      if (!accepted?.ok || !accepted.accepted) {
+        if (!accepted?.busy) await resetPdfRenderer();
+        throw new Error(accepted?.error || 'The local PDF renderer did not accept the job.');
+      }
+      if (accepted.jobId !== jobId) {
+        await resetPdfRenderer();
+        throw new Error('Received a stale PDF job acknowledgement.');
+      }
+
+      options.onProgress?.({ jobId, stage:'rendering', detail:'' });
+      const result = await waitForPdfJob(jobId, timeoutMs, options);
+      if (!result || result.jobId !== jobId) {
+        await resetPdfRenderer();
+        throw new Error('The PDF renderer returned an invalid job result.');
+      }
+      return result;
     } catch (error) {
-      if (timedOut) {
-        try {
-          await chrome.runtime.sendMessage({
-            type: 'CGX_CANCEL_PDF',
-            jobId,
-            reason: 'Caller safety deadline exceeded.'
-          });
-        } catch {}
+      if (/safety deadline/i.test(String(error?.message || error))) {
+        await resetPdfRenderer();
       }
       throw error;
     } finally {
-      clearTimeout(timeoutId);
+      chrome.runtime.onMessage.removeListener(progressListener);
     }
   }
 
@@ -1128,6 +1243,8 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
     createDocxBlob,
     buildPrintHtml,
     buildPdfDefinition,
+    preflightPdfSource,
+    preflightPdfDefinition,
     exportMarkdown,
     exportDocx,
     exportPdf,

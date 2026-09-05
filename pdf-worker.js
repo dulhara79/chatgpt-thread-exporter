@@ -1,9 +1,18 @@
 (() => {
   'use strict';
 
-  const RENDER_MESSAGE = 'CGX_OFFSCREEN_RENDER_PDF';
+  const START_MESSAGE = 'CGX_OFFSCREEN_START_PDF';
+  const START_SMOKE_MESSAGE = 'CGX_OFFSCREEN_START_SMOKE';
+  const STATUS_MESSAGE = 'CGX_OFFSCREEN_PDF_STATUS';
   const CLEANUP_MESSAGE = 'CGX_OFFSCREEN_RELEASE_PDF';
+  const DOWNLOAD_MESSAGE = 'CGX_DOWNLOAD_PDF';
+  const RENDER_FINISHED_MESSAGE = 'CGX_PDF_RENDER_FINISHED';
+  const DOWNLOAD_STATE_MESSAGE = 'CGX_OFFSCREEN_DOWNLOAD_STATE';
+  const PROGRESS_MESSAGE = 'CGX_PDF_PROGRESS';
   const activeUrls = new Set();
+  const pendingDownloads = new Map();
+  const jobStates = new Map();
+  let currentJobId = null;
 
   const IMAGE_TIMEOUT_MS = 8000;
   const SVG_LOAD_TIMEOUT_MS = 6000;
@@ -11,7 +20,6 @@
   const MAX_TOTAL_MEDIA_BYTES = 24 * 1024 * 1024;
   const MAX_SVG_CHARS = 2 * 1024 * 1024;
   const MAX_IMAGE_CONCURRENCY = 3;
-  const PDF_CALLBACK_TIMEOUT_MS = 35000;
 
   const FONT_FILES = Object.freeze({
     sinhala: ['NotoSansSinhala-Regular.ttf', 'vendor/fonts/NotoSansSinhala-Regular.ttf'],
@@ -385,32 +393,32 @@
 
   function getPdfBlob(doc) {
     return new Promise((resolve, reject) => {
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        reject(new Error('PDF engine did not finish before its callback deadline.'));
-      }, PDF_CALLBACK_TIMEOUT_MS);
       try {
-        globalThis.pdfMake.createPdf(doc).getBlob(blob => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          resolve(blob);
-        });
+        // Do not fake-cancel pdfmake with a Promise timeout. If pdfmake blocks
+        // synchronously, a timer cannot interrupt it anyway. The browser-owned
+        // watchdog in background.js destroys this offscreen context instead.
+        globalThis.pdfMake.createPdf(doc).getBlob(resolve);
       } catch (error) {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
         reject(error);
       }
     });
   }
 
-  async function createPdfBlob(definition) {
+  function emitProgress(jobId, stage, detail = '') {
+    chrome.runtime.sendMessage({
+      type: PROGRESS_MESSAGE,
+      jobId,
+      stage,
+      detail
+    }).catch(() => {});
+  }
+
+  async function createPdfBlob(definition, jobId) {
     mediaBytesUsed = 0;
+    emitProgress(jobId, 'fonts');
     await ensureFonts(definition || {});
     const pageSize = String(definition?.pageSize || 'A4');
+    emitProgress(jobId, 'assets');
     const doc = await transformNode(definition || {}, pageSize);
     doc.footer = (currentPage, pageCount) => ({
       columns: [
@@ -421,28 +429,149 @@
       fontSize: 8,
       color: '#64748B'
     });
+    emitProgress(jobId, 'layout');
     return getPdfBlob(doc);
-  }
-
-  async function renderPdf(request) {
-    if (!globalThis.pdfMake?.createPdf) throw new Error('The local vector PDF engine did not load.');
-    const blob = await createPdfBlob(request.definition);
-    if (!(blob instanceof Blob) || blob.size < 5) throw new Error('The PDF engine returned an empty file.');
-
-    const url = URL.createObjectURL(blob);
-    activeUrls.add(url);
-    setTimeout(() => {
-      if (!activeUrls.delete(url)) return;
-      URL.revokeObjectURL(url);
-    }, 5 * 60 * 1000);
-
-    return { ok:true, jobId:request.jobId, url, bytes:blob.size, engine:'pdfmake-vector-unicode-v2' };
   }
 
   function releaseUrl(url) {
     if (!activeUrls.delete(url)) return false;
     URL.revokeObjectURL(url);
     return true;
+  }
+
+  async function requestDownload(jobId, url, filename) {
+    emitProgress(jobId, 'download');
+    const response = await chrome.runtime.sendMessage({
+      type: DOWNLOAD_MESSAGE,
+      jobId,
+      url,
+      filename
+    });
+    if (!response?.ok || !Number.isInteger(response.downloadId)) {
+      throw new Error(response?.error || 'Chrome could not start the PDF download.');
+    }
+    pendingDownloads.set(response.downloadId, { jobId, url });
+    setTimeout(() => {
+      const pending = pendingDownloads.get(response.downloadId);
+      if (!pending || pending.url !== url) return;
+      pendingDownloads.delete(response.downloadId);
+      releaseUrl(url);
+    }, 10 * 60 * 1000);
+    return response;
+  }
+
+  function setJobState(jobId, state, extra = {}) {
+    const snapshot = {
+      jobId,
+      state,
+      updatedAt: Date.now(),
+      ...extra
+    };
+    jobStates.set(jobId, snapshot);
+    // Only the active job and a few recent terminal results are useful.
+    if (jobStates.size > 8) {
+      for (const [id, value] of jobStates) {
+        if (id !== currentJobId && (value.state === 'done' || value.state === 'error')) {
+          jobStates.delete(id);
+          if (jobStates.size <= 8) break;
+        }
+      }
+    }
+    return snapshot;
+  }
+
+  function statusFor(jobId) {
+    const state = jobStates.get(String(jobId || ''));
+    if (!state) {
+      return {
+        ok: true,
+        found: false,
+        jobId: String(jobId || ''),
+        activeJobId: currentJobId
+      };
+    }
+    return {
+      ok: true,
+      found: true,
+      ...state,
+      activeJobId: currentJobId
+    };
+  }
+
+  function acceptJob(request, smoke = false) {
+    const jobId = String(request?.jobId || '').trim();
+    if (!jobId) return { ok:false, error:'PDF export job id is missing.' };
+    if (currentJobId) {
+      return {
+        ok:false,
+        busy:true,
+        jobId,
+        activeJobId:currentJobId,
+        error:'Another PDF export is already rendering. Please retry after it finishes.'
+      };
+    }
+
+    currentJobId = jobId;
+    setJobState(jobId, 'accepted', { smoke });
+    setTimeout(() => {
+      runPdfJob(request, smoke).catch(() => {});
+    }, 0);
+    return { ok:true, accepted:true, jobId };
+  }
+
+  async function runPdfJob(request, smoke = false) {
+    const jobId = String(request.jobId);
+    let url = '';
+    try {
+      setJobState(jobId, 'rendering', { smoke });
+      emitProgress(jobId, 'render-started');
+      const blob = await createPdfBlob(request.definition, jobId);
+      if (!(blob instanceof Blob) || blob.size < 5) throw new Error('The PDF engine returned an empty file.');
+
+      // The watchdog protects the expensive render only. Once a valid Blob
+      // exists, clear it even if Save As waits for user interaction.
+      await chrome.runtime.sendMessage({
+        type: RENDER_FINISHED_MESSAGE,
+        jobId
+      }).catch(() => {});
+
+      if (smoke) {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        setJobState(jobId, 'done', {
+          smoke:true,
+          result:{
+            bytes:bytes.length,
+            magic:String.fromCharCode(...bytes.subarray(0, 4)),
+            engine:'pdfmake-vector-unicode-v3'
+          }
+        });
+        return;
+      }
+
+      url = URL.createObjectURL(blob);
+      activeUrls.add(url);
+      emitProgress(jobId, 'blob-ready', String(blob.size));
+      setJobState(jobId, 'downloading', { smoke:false, bytes:blob.size });
+      const download = await requestDownload(jobId, url, request.filename);
+      setJobState(jobId, 'done', {
+        smoke:false,
+        result:{
+          jobId,
+          downloadId:download.downloadId,
+          filename:download.filename,
+          bytes:blob.size,
+          engine:'pdfmake-vector-unicode-v3'
+        }
+      });
+    } catch (error) {
+      if (url) releaseUrl(url);
+      setJobState(jobId, 'error', {
+        smoke,
+        error:error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      if (currentJobId === jobId) currentJobId = null;
+    }
   }
 
   chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
@@ -452,11 +581,39 @@
       sendResponse({ ok:true, released:releaseUrl(request.url) });
       return;
     }
-    if (request.type !== RENDER_MESSAGE) return;
 
-    renderPdf(request)
-      .then(sendResponse)
-      .catch(error => sendResponse({ ok:false, jobId:request.jobId, error:error instanceof Error ? error.message : String(error) }));
-    return true;
+    if (request.type === STATUS_MESSAGE) {
+      sendResponse(statusFor(request.jobId));
+      return;
+    }
+
+    if (request.type === START_MESSAGE) {
+      // Acknowledge immediately. Never hold a runtime message channel open
+      // while pdfmake renders; Chrome may close long-lived response channels.
+      sendResponse(acceptJob(request, false));
+      return;
+    }
+
+    if (request.type === START_SMOKE_MESSAGE) {
+      sendResponse(acceptJob(request, true));
+      return;
+    }
+
+    if (request.type === DOWNLOAD_STATE_MESSAGE) {
+      const pending = pendingDownloads.get(request.downloadId);
+      if (!pending) {
+        sendResponse({ ok:true, matched:false });
+        return;
+      }
+      pendingDownloads.delete(request.downloadId);
+      releaseUrl(pending.url);
+      emitProgress(
+        pending.jobId,
+        request.state === 'complete' ? 'download-complete' : 'download-interrupted',
+        request.error || ''
+      );
+      sendResponse({ ok:true, matched:true });
+      return;
+    }
   });
 })();

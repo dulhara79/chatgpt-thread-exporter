@@ -6,6 +6,7 @@
   const EXPORT_BUTTON_CLASS = 'cgx-inline-export-button';
   const THREAD_BUTTON_ID = 'cgx-thread-export-button';
   const MENU_ID = 'cgx-export-menu';
+  const MAX_INLINE_SVG_CHARS = 1000000;
   const exporter = globalThis.ChatGPTExporter;
 
   if (!exporter) {
@@ -79,6 +80,9 @@
         if (!meaningful) return '';
         try {
           const serialized = new XMLSerializer().serializeToString(el);
+          if (serialized.length > MAX_INLINE_SVG_CHARS) {
+            return normalizeText(el.textContent || '') || '[Diagram omitted because it is too large to embed safely]';
+          }
           const encoded = btoa(unescape(encodeURIComponent(serialized)));
           return '![Diagram](data:image/svg+xml;base64,' + encoded + ')';
         } catch {
@@ -564,7 +568,23 @@
             button.classList.add('cgx-export-busy');
             if (strong) strong.textContent = 'Preparing PDF…';
             try {
-              await exporter.exportPdf(data, data.turns, { pageSize });
+              await exporter.exportPdf(data, data.turns, {
+                pageSize,
+                onProgress: progress => {
+                  if (!strong) return;
+                  const labels = {
+                    preflight: 'Checking PDF…',
+                    transfer: 'Sending to renderer…',
+                    rendering: 'Rendering PDF…',
+                    fonts: 'Loading fonts…',
+                    assets: 'Preparing media…',
+                    layout: 'Laying out pages…',
+                    'blob-ready': 'Opening Save As…',
+                    download: 'Opening Save As…'
+                  };
+                  strong.textContent = labels[progress?.stage] || 'Rendering PDF…';
+                }
+              });
             } finally {
               button.classList.remove('cgx-export-busy');
               if (strong) strong.textContent = originalLabel;
@@ -576,7 +596,7 @@
           }
 
           closeMenu(menu);
-          showToast(format === 'pdf' ? 'PDF ready to save.' : 'Exported ' + (format === 'docx' ? 'Word document (' + pageSize + ')' : 'Markdown file') + '.');
+          showToast(format === 'pdf' ? 'PDF Save As opened.' : 'Exported ' + (format === 'docx' ? 'Word document (' + pageSize + ')' : 'Markdown file') + '.');
         } catch (error) {
           closeMenu(menu);
           showToast(error?.message || String(error), true);

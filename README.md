@@ -1,10 +1,10 @@
-# ChatGPT Thread Exporter — V0.3.9
+# ChatGPT Thread Exporter — V0.5.0
 
 A local-only Chrome Manifest V3 extension for exporting ChatGPT conversations to professional PDF, Microsoft Word (`.docx`), and Markdown.
 
-## V0.3.9 highlights
+## V0.5.0 highlights
 
-- **PDF export keeps the hidden offscreen/direct-Save-As lifecycle** with no debugger or render tab. V0.3.9 removes the textual PNG fallback: multilingual text, emoji/symbols, code, and character diagrams remain selectable PDF text.
+- **PDF reliability is redesigned around an offscreen-owned render lifecycle.** The service worker is now a stateless offscreen/download bridge, a Chrome alarm hard-resets stuck pdfmake work, and the heavy PDF definition crosses runtime messaging only once. The selectable Unicode/diagram behavior from V0.3.9 is preserved.
 - PDF, Word, and Markdown actions now use consistent professional SVG document icons instead of text-letter badges.
 - Export one Q&A or the complete rendered conversation.
 - Every assistant answer gets a self-healing download/export control. If ChatGPT React re-renders an action row and removes the control, the extension inserts it again.
@@ -46,7 +46,7 @@ Use the **Export** control beside the conversation header Share action. The exte
 
 ### PDF
 
-PDFs are generated locally inside an MV3 offscreen document using a bundled browser-side vector PDF engine. Text is split into script-aware runs and mapped to bundled fonts; code and character diagrams use a dedicated monospace no-wrap path, so ordinary content remains selectable/copyable. Supported SVG stays vector, while only unsupported graphical SVG assets may be rasterized. The worker returns a Blob URL to the service worker, which opens Chrome's native **Save As** dialog with `saveAs: true`; the suggested filename is the conversation title and A4 remains the default page size.
+PDFs are generated locally inside an MV3 offscreen document using a bundled browser-side vector PDF engine. Text is split into script-aware runs and mapped to bundled fonts; code and character diagrams use a dedicated monospace no-wrap path, so ordinary content remains selectable/copyable. Supported SVG stays vector, while only unsupported graphical SVG assets may be rasterized. The offscreen renderer owns each PDF job and Blob URL. The service worker is a stateless offscreen/download bridge, with a browser-alarm watchdog that destroys a stuck renderer. Chrome then opens native **Save As** with `saveAs: true`; the suggested filename is the conversation title and A4 remains the default page size.
 
 ### Word (.docx)
 
@@ -86,7 +86,7 @@ npm test
 npm run check
 ```
 
-The regression suite covers selectable multilingual font runs, the exact clinician architecture diagram as a preformatted node, bundled-font PDF generation, image/SVG handling, A4/Letter/Legal, DOCX behavior, and guards against debugger/tab/html2canvas or textual raster fallbacks.
+The regression suite covers renderer ownership, durable watchdog/reset behavior, payload preflight, selectable multilingual font runs, the exact clinician architecture diagram, image/SVG handling, A4/Letter/Legal, DOCX behavior, and guards against debugger/tab/html2canvas or textual raster fallbacks. CI also loads the unpacked extension in real Chromium and verifies that the actual MV3 offscreen pdfmake path produces a `%PDF` Blob.
 
 GitHub Actions runs the same checks on pull requests to `main`.
 
@@ -101,12 +101,12 @@ GitHub Actions runs the same checks on pull requests to `main`.
 
 The approved V0.3 design is documented at:
 
-`docs/superpowers/specs/2026-09-04-professional-export-rendering-design.md`
+`docs/superpowers/specs/2026-09-05-v050-renderer-owned-pdf-reliability-design.md`
 
 ## Third-party component
 
-V0.3.9 bundles pdfmake 0.2.20 plus local open-source Noto fonts for Sinhala, Tamil, Korean, symbols/emoji, and monospace text. html2pdf.js/html2canvas are not used for PDF export.
+V0.5.0 bundles pdfmake 0.2.20 plus local open-source Noto fonts for Sinhala, Tamil, Korean, symbols/emoji, and monospace text. html2pdf.js/html2canvas are not used for PDF export.
 
 ## Version
 
-V0.3.9
+V0.5.0

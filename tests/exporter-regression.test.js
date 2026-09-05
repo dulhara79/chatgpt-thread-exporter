@@ -149,12 +149,17 @@ test('PDF export uses an offscreen vector worker with direct Save As and no debu
   const manifest = JSON.parse(fs.readFileSync(require.resolve('../manifest.json'), 'utf8'));
 
   assert.match(exporterSource, /buildPdfDefinition/);
-  assert.match(exporterSource, /CGX_EXPORT_PDF/);
+  assert.match(exporterSource, /CGX_PREPARE_PDF_WORKER/);
+  assert.match(exporterSource, /CGX_OFFSCREEN_START_PDF/);
   assert.match(backgroundSource, /chrome\.offscreen\.createDocument/);
   assert.match(backgroundSource, /pdf-worker\.html/);
   assert.match(backgroundSource, /chrome\.downloads\.download/);
   assert.match(backgroundSource, /saveAs: true/);
-  assert.match(backgroundSource, /jobQueue/);
+  assert.match(backgroundSource, /chrome\.alarms/);
+  assert.doesNotMatch(backgroundSource, /jobQueue|runningJob/);
+  assert.match(workerSource, /currentJobId/);
+  assert.match(workerSource, /CGX_OFFSCREEN_PDF_STATUS/);
+  assert.match(exporterSource, /waitForPdfJob/);
   assert.match(workerSource, /pdfMake\.createPdf/);
   assert.match(workerSource, /URL\.createObjectURL/);
 
@@ -203,16 +208,18 @@ test('export menu lifecycle removes stale capture listeners and is instance-scop
   assert.doesNotMatch(contentSource, /document\.removeEventListener\('pointerdown', outside, true\)/);
 });
 
-test('PDF caller timeout cancels the exact job instead of abandoning it', () => {
+test('PDF caller preflights payload and hard-resets a timed-out offscreen renderer', () => {
   const exporterSource = fs.readFileSync(require.resolve('../exporter.js'), 'utf8');
   const backgroundSource = fs.readFileSync(require.resolve('../background.js'), 'utf8');
-  assert.match(exporterSource, /jobId/);
-  assert.match(exporterSource, /CGX_CANCEL_PDF/);
-  assert.match(exporterSource, /safety deadline and was cancelled/);
-  assert.match(backgroundSource, /cancelJob/);
+  assert.match(exporterSource, /MAX_PDF_SOURCE_BYTES/);
+  assert.match(exporterSource, /MAX_PDF_DEFINITION_BYTES/);
+  assert.match(exporterSource, /MAX_PDF_DEFINITION_NODES/);
+  assert.match(exporterSource, /preflightPdfSource/);
+  assert.match(exporterSource, /preflightPdfDefinition/);
+  assert.match(exporterSource, /CGX_RESET_PDF_WORKER/);
+  assert.match(exporterSource, /renderer was reset/);
   assert.match(backgroundSource, /resetOffscreenDocument/);
   assert.match(backgroundSource, /closeDocument/);
-  assert.doesNotMatch(backgroundSource, /renderQueue\s*=\s*Promise\.resolve/);
 });
 
 
@@ -265,4 +272,37 @@ test('escaped pipes stay inside one Markdown table cell', () => {
   const definition = exporter.buildPdfDefinition(data, tableTurns);
   const raw = JSON.stringify(definition);
   assert.match(raw, /one \\| two|one \| two/);
+});
+
+
+test('large SVG is capped before base64 serialization', () => {
+  const source = fs.readFileSync(require.resolve('../content.js'), 'utf8');
+  assert.match(source, /MAX_INLINE_SVG_CHARS/);
+  assert.match(source, /serialized\.length > MAX_INLINE_SVG_CHARS/);
+  assert.match(source, /too large to embed safely/);
+});
+
+test('V0.5 manifest uses alarms watchdog and BLOBS-capable offscreen renderer', () => {
+  const manifest = JSON.parse(fs.readFileSync(require.resolve('../manifest.json'), 'utf8'));
+  const backgroundSource = fs.readFileSync(require.resolve('../background.js'), 'utf8');
+  assert.equal(manifest.version, '0.5.0');
+  assert.equal(manifest.permissions.includes('alarms'), true);
+  assert.match(backgroundSource, /'BLOBS'/);
+});
+
+test('Markdown parser accepts tilde and longer code fences', () => {
+  const source = fs.readFileSync(require.resolve('../exporter.js'), 'utf8');
+  assert.match(source, /~\{3,/);
+  assert.match(source, /marker\[0\]/);
+});
+
+
+test('PDF render protocol never holds one message response open for pdfmake', () => {
+  const exporterSource = fs.readFileSync(require.resolve('../exporter.js'), 'utf8');
+  const workerSource = fs.readFileSync(require.resolve('../pdf-worker.js'), 'utf8');
+  assert.match(exporterSource, /CGX_OFFSCREEN_START_PDF/);
+  assert.match(exporterSource, /CGX_OFFSCREEN_PDF_STATUS/);
+  assert.match(exporterSource, /shortRuntimeMessage/);
+  assert.match(workerSource, /sendResponse\(acceptJob\(request, false\)\)/);
+  assert.doesNotMatch(workerSource, /renderPdf\(request\)\s*\.then\(sendResponse\)/);
 });

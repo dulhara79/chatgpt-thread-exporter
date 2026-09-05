@@ -19,3 +19,16 @@ jobs:
           node-version: 24
       - run: npm test
       - run: npm run check
+
+
+  browser-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install browser test driver and Chrome for Testing
+        run: npm install --no-save --no-audit --no-fund puppeteer@25.10.0
+      - name: Run real Chromium extension smoke
+        run: xvfb-run -a node tests/browser-extension-smoke.mjs

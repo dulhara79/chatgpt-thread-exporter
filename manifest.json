@@ -2,13 +2,14 @@
   "manifest_version": 3,
   "name": "ChatGPT Thread Exporter",
   "short_name": "GPT Export",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Export an entire ChatGPT conversation or any individual Q&A to professional PDF, Word (.docx), or Markdown documents.",
   "minimum_chrome_version": "109",
   "permissions": [
     "activeTab",
     "downloads",
-    "offscreen"
+    "offscreen",
+    "alarms"
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
