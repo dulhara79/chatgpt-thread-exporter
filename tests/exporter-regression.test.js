@@ -285,7 +285,7 @@ test('large SVG is capped before base64 serialization', () => {
 test('V0.5 manifest uses alarms watchdog and BLOBS-capable offscreen renderer', () => {
   const manifest = JSON.parse(fs.readFileSync(require.resolve('../manifest.json'), 'utf8'));
   const backgroundSource = fs.readFileSync(require.resolve('../background.js'), 'utf8');
-  assert.equal(manifest.version, '0.5.0');
+  assert.equal(manifest.version, '0.5.1');
   assert.equal(manifest.permissions.includes('alarms'), true);
   assert.match(backgroundSource, /'BLOBS'/);
 });
@@ -305,4 +305,10 @@ test('PDF render protocol never holds one message response open for pdfmake', ()
   assert.match(exporterSource, /shortRuntimeMessage/);
   assert.match(workerSource, /sendResponse\(acceptJob\(request, false\)\)/);
   assert.doesNotMatch(workerSource, /renderPdf\(request\)\s*\.then\(sendResponse\)/);
+});
+
+
+test('bundled pdfmake guards missing GPOS anchors for Indic fonts', () => {
+  const pdfmake = fs.readFileSync(require.resolve('../vendor/pdfmake.min.js'), 'utf8');
+  assert.match(pdfmake, /getAnchor\(r\)\{if\(!r\)return\{x:0,y:0\}/);
 });

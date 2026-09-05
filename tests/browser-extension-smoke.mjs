@@ -61,7 +61,7 @@ try {
       content:[{
         text:[
           { text:'English ' },
-          { text:'සිංහල පරීක්ෂණය', cgxFont:'sinhala' }
+          { text:'සිංහල පරීක්ෂණය', cgxFont:'sinhala', fontFeatures:[] }
         ]
       }]
     };
@@ -79,7 +79,8 @@ try {
 
   const renderStartedAt = Date.now();
   let rendered = null;
-  while (Date.now() - renderStartedAt < 60000) {
+  let lastStatus = null;
+  while (Date.now() - renderStartedAt < 8000) {
     try {
       const status = await Promise.race([
         page.evaluate(async () => chrome.runtime.sendMessage({
@@ -89,6 +90,7 @@ try {
         })),
         new Promise(resolve => setTimeout(() => resolve(null), 1200))
       ]);
+      if (status?.found) lastStatus = status;
       if (status?.found && status.state === 'done') {
         rendered = { ok:true, jobId:status.jobId, ...status.result };
         break;
@@ -101,7 +103,11 @@ try {
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
   if (!rendered) {
-    rendered = { ok:false, error:'Browser smoke polling deadline exceeded.' };
+    rendered = {
+      ok:false,
+      error:'Browser smoke polling deadline exceeded.',
+      lastStatus
+    };
   }
   rendered.elapsedMs = Date.now() - renderStartedAt;
   process.stdout.write('Render result: ' + JSON.stringify(rendered) + '\n');

@@ -405,6 +405,15 @@
   }
 
   function emitProgress(jobId, stage, detail = '') {
+    const existing = jobStates.get(String(jobId || ''));
+    if (existing && existing.state !== 'done' && existing.state !== 'error') {
+      jobStates.set(String(jobId), {
+        ...existing,
+        stage,
+        stageDetail: detail,
+        updatedAt: Date.now()
+      });
+    }
     chrome.runtime.sendMessage({
       type: PROGRESS_MESSAGE,
       jobId,
@@ -430,7 +439,9 @@
       color: '#64748B'
     });
     emitProgress(jobId, 'layout');
-    return getPdfBlob(doc);
+    const pdfPromise = getPdfBlob(doc);
+    emitProgress(jobId, 'pdfmake-getblob');
+    return pdfPromise;
   }
 
   function releaseUrl(url) {
@@ -494,6 +505,7 @@
       ok: true,
       found: true,
       ...state,
+      engineDebug: globalThis.__cgxPdfDebug || '',
       activeJobId: currentJobId
     };
   }
