@@ -110,4 +110,4 @@ V0.3.9 bundles pdfmake 0.2.20, Roboto, and subsetted open-source Noto fonts for 
 
 ## Version
 
-V0.3.3
+V0.3.9
