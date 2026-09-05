@@ -1,11 +1,10 @@
-# ChatGPT Thread Exporter — V0.3.8
+# ChatGPT Thread Exporter — V0.3.9
 
 A local-only Chrome Manifest V3 extension for exporting ChatGPT conversations to professional PDF, Microsoft Word (`.docx`), and Markdown.
 
-## V0.3.8 highlights
+## V0.3.9 highlights
 
-- **Long-thread PDF generation is now chunked by Q&A/answer blocks** instead of rasterizing the entire conversation into one giant canvas. This keeps memory bounded and substantially reduces export time for large conversations.
-- **PDF export now uses a hidden offscreen vector renderer**. It no longer uses `chrome.debugger`, `Page.printToPDF`, temporary render tabs, html2canvas, or whole-page screenshots.
+- **PDF export keeps the hidden offscreen/direct-Save-As lifecycle** with no debugger or render tab. V0.3.9 removes the textual PNG fallback: multilingual text, emoji/symbols, code, and character diagrams remain selectable PDF text.
 - PDF, Word, and Markdown actions now use consistent professional SVG document icons instead of text-letter badges.
 - Export one Q&A or the complete rendered conversation.
 - Every assistant answer gets a self-healing download/export control. If ChatGPT React re-renders an action row and removes the control, the extension inserts it again.
@@ -14,9 +13,9 @@ A local-only Chrome Manifest V3 extension for exporting ChatGPT conversations to
 - Ordered lists preserve their actual sequence and start values instead of becoming `1, 1, 1...`.
 - Word uses native OOXML numbering definitions.
 - Meaningful images are retained while favicons, avatars, toolbar icons, and tiny decorative assets are filtered.
-- Content-bearing SVG diagrams are preserved. PDF renders them directly; Word rasterizes rendered SVG diagrams locally before embedding them.
-- PDF renders meaningful images at document-safe sizes; Word embeds fetchable PNG/JPEG/GIF/WebP images and degrades to a useful link when embedding is unavailable.
-- Common KaTeX/MathJax structures are recovered as TeX where available. PDF converts supported LaTeX structures to native MathML, while Word writes native OMML equations for fractions, roots, powers/subscripts, Greek symbols, sums/integrals, matrices, and common operators. Markdown keeps the original TeX notation.
+- Character/ASCII diagrams are preserved as exact no-wrap monospace PDF text. Supported SVG diagrams stay vector; only unsupported SVG graphics are rasterized.
+- PDF embeds data images and fetchable ChatGPT/OpenAI-hosted HTTPS images at document-safe sizes, with alt/link fallback when an external image cannot be fetched. Word behavior is unchanged.
+- Common KaTeX/MathJax structures are recovered as TeX where available. PDF keeps mathematical content selectable instead of rasterizing the containing paragraph; Word writes native OMML for supported structures and Markdown keeps TeX.
 - Unicode-first export supports Sinhala, English, Tamil, Korean, mathematical symbols, combining text, and emoji subject to fonts installed on the user's system.
 - **A4 is the default** page size; **Letter** and **Legal** are selectable for PDF and Word.
 - PDF, Word, and Markdown share a restrained professional information hierarchy with 10.5 pt body text, 23 pt document titles, navy/slate headings, subtle rules, Aptos/Segoe UI/Nirmala UI fallbacks, Cascadia Mono/Consolas code, and print-safe spacing.
@@ -47,7 +46,7 @@ Use the **Export** control beside the conversation header Share action. The exte
 
 ### PDF
 
-PDFs are generated locally inside an MV3 offscreen document using a bundled browser-side vector PDF engine. Normal text, lists, tables, headings, code, rules, and document structure are emitted semantically; complex-script fallback is rasterized only at the individual paragraph/element level so the extension never screenshots the full page or full conversation. The worker returns a Blob URL to the service worker, which immediately opens Chrome's native **Save As** dialog with `saveAs: true`; the suggested filename is the conversation title and A4 remains the default page size.
+PDFs are generated locally inside an MV3 offscreen document using a bundled browser-side vector PDF engine. Text is split into script-aware runs and mapped to bundled fonts; code and character diagrams use a dedicated monospace no-wrap path, so ordinary content remains selectable/copyable. Supported SVG stays vector, while only unsupported graphical SVG assets may be rasterized. The worker returns a Blob URL to the service worker, which opens Chrome's native **Save As** dialog with `saveAs: true`; the suggested filename is the conversation title and A4 remains the default page size.
 
 ### Word (.docx)
 
@@ -67,7 +66,7 @@ Produces clean semantic Markdown without the old metadata table. Lists, headings
 - Conversation processing and document generation stay in the browser.
 - PDF generation requires only `activeTab`, `downloads`, and `offscreen`. There is no `debugger` permission and no PDF render tab.
 
-The extension intentionally does not request broad host permissions solely to improve rare cross-origin image cases.
+The extension does not request broad all-site access. It includes narrow ChatGPT/OpenAI asset-host permissions so ChatGPT-hosted images can be embedded; unrelated external images still degrade safely when cross-origin access is unavailable.
 
 ## Install
 
@@ -87,7 +86,7 @@ npm test
 npm run check
 ```
 
-The regression suite covers metadata removal, ordered list sequence, A4/Letter/Legal, favicon filtering, multilingual Unicode/emoji, TeX preservation, DOCX numbering/page geometry, and guards that enforce the debugger-free offscreen vector PDF path, repeat-safe export menu lifecycle, and prevent reintroducing whole-document raster export.
+The regression suite covers selectable multilingual font runs, the exact clinician architecture diagram as a preformatted node, bundled-font PDF generation, image/SVG handling, A4/Letter/Legal, DOCX behavior, and guards against debugger/tab/html2canvas or textual raster fallbacks.
 
 GitHub Actions runs the same checks on pull requests to `main`.
 
@@ -106,8 +105,8 @@ The approved V0.3 design is documented at:
 
 ## Third-party component
 
-V0.3.8 bundles pdfmake 0.2.20 and its Roboto virtual font files for local PDF generation. html2pdf.js/html2canvas are not used for PDF export.
+V0.3.9 bundles pdfmake 0.2.20 plus local open-source Noto fonts for Sinhala, Tamil, Korean, symbols/emoji, and monospace text. html2pdf.js/html2canvas are not used for PDF export.
 
 ## Version
 
-V0.3.3
+V0.3.9
