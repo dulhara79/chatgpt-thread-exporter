@@ -50,10 +50,15 @@ test('cancelling a running PDF hard-resets the worker and the next queued export
     }
   };
 
+  const testSetTimeout = (fn, ms, ...args) => {
+    if (Number(ms) >= 60000) return 0;
+    return setTimeout(fn, ms, ...args);
+  };
+
   vm.runInNewContext(source, {
     chrome,
     globalThis: {},
-    setTimeout,
+    setTimeout: testSetTimeout,
     clearTimeout,
     queueMicrotask,
     Promise,
