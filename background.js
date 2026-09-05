@@ -1,7 +1,12 @@
 (() => {
   'use strict';
 
-  const SAVE_MESSAGE = 'CGX_SAVE_PDF';
+  const OFFSCREEN_URL = 'pdf-renderer.html';
+  const EXPORT_MESSAGE = 'CGX_EXPORT_PDF';
+  const RENDER_MESSAGE = 'CGX_OFFSCREEN_RENDER_PDF';
+  const CLEANUP_MESSAGE = 'CGX_OFFSCREEN_RELEASE_PDF';
+
+  let creatingOffscreen = null;
 
   function sanitizeFilename(name) {
     const cleaned = String(name || 'ChatGPT Conversation')
@@ -13,40 +18,100 @@
     return base + '.pdf';
   }
 
-  function trustedRenderer(sender) {
-    const expected = chrome.runtime.getURL('pdf-renderer.html');
-    return sender?.url === expected;
+  async function hasOffscreenDocument() {
+    const url = chrome.runtime.getURL(OFFSCREEN_URL);
+
+    if (chrome.runtime.getContexts) {
+      const contexts = await chrome.runtime.getContexts({
+        contextTypes: ['OFFSCREEN_DOCUMENT'],
+        documentUrls: [url]
+      });
+      return contexts.length > 0;
+    }
+
+    const matchedClients = await self.clients.matchAll();
+    return matchedClients.some(client => client.url === url);
   }
 
-  function trustedBlobUrl(url) {
-    const extensionOrigin = chrome.runtime.getURL('').replace(/\/$/, '');
-    return typeof url === 'string' && url.startsWith('blob:' + extensionOrigin + '/');
-  }
+  async function ensureOffscreenDocument() {
+    if (await hasOffscreenDocument()) return;
+    if (creatingOffscreen) return creatingOffscreen;
 
-  async function savePdf(request, sender) {
-    if (!trustedRenderer(sender)) throw new Error('Untrusted PDF save request.');
-    if (!trustedBlobUrl(request?.url)) throw new Error('Invalid generated PDF URL.');
-
-    const filename = sanitizeFilename(request.filename);
-    const downloadId = await chrome.downloads.download({
-      url: request.url,
-      filename,
-      conflictAction: 'uniquify',
-      saveAs: true
+    creatingOffscreen = chrome.offscreen.createDocument({
+      url: OFFSCREEN_URL,
+      reasons: ['DOM_PARSER'],
+      justification: 'Render ChatGPT conversation HTML into a local PDF without opening a tab or print preview.'
     });
 
-    if (!Number.isInteger(downloadId)) throw new Error('Chrome could not open the Save As dialog.');
-    return { ok: true, downloadId, filename };
+    try {
+      await creatingOffscreen;
+    } finally {
+      creatingOffscreen = null;
+    }
   }
 
-  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request?.type !== SAVE_MESSAGE) return;
-    savePdf(request, sender)
+  async function releasePdfUrl(url) {
+    if (!url) return;
+    try {
+      await chrome.runtime.sendMessage({
+        target: 'cgx-offscreen',
+        type: CLEANUP_MESSAGE,
+        url
+      });
+    } catch {}
+  }
+
+  async function renderAndSavePdf(request) {
+    await ensureOffscreenDocument();
+
+    const rendered = await chrome.runtime.sendMessage({
+      target: 'cgx-offscreen',
+      type: RENDER_MESSAGE,
+      html: String(request.html || ''),
+      filename: String(request.filename || 'ChatGPT Conversation'),
+      pageSize: String(request.pageSize || 'A4')
+    });
+
+    if (!rendered?.ok || !rendered.url) {
+      throw new Error(rendered?.error || 'The local PDF renderer failed.');
+    }
+
+    const filename = sanitizeFilename(request.filename);
+    try {
+      const downloadId = await chrome.downloads.download({
+        url: rendered.url,
+        filename,
+        conflictAction: 'uniquify',
+        saveAs: true
+      });
+
+      if (!Number.isInteger(downloadId)) {
+        throw new Error('Chrome could not open the Save As dialog.');
+      }
+
+      return {
+        ok: true,
+        downloadId,
+        filename,
+        bytes: rendered.bytes || 0
+      };
+    } finally {
+      // The download API has already accepted the generated resource by this point.
+      // The offscreen renderer owns the object URL and releases it explicitly.
+      await releasePdfUrl(rendered.url);
+    }
+  }
+
+  chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+    if (request?.type !== EXPORT_MESSAGE || request?.target === 'cgx-offscreen') return;
+
+    renderAndSavePdf(request)
       .then(sendResponse)
       .catch(error => sendResponse({
         ok: false,
         error: error instanceof Error ? error.message : String(error)
       }));
+
     return true;
   });
 })();
