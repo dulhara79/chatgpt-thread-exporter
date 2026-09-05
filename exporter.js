@@ -422,12 +422,22 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
       throw new Error('PDF export is only available inside the Chrome extension.');
     }
 
-    const response = await chrome.runtime.sendMessage({
-      type: 'CGX_EXPORT_PDF',
-      html,
-      filename,
-      pageSize
-    });
+    const timeoutMs = Math.max(30000, Number(options.timeoutMs || 90000));
+    let timeoutId;
+
+    const response = await Promise.race([
+      chrome.runtime.sendMessage({
+        type: 'CGX_EXPORT_PDF',
+        html,
+        filename,
+        pageSize
+      }),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error('PDF generation timed out. Reload the extension and try again.'));
+        }, timeoutMs);
+      })
+    ]).finally(() => clearTimeout(timeoutId));
 
     if (!response?.ok) {
       throw new Error(response?.error || 'PDF generation failed.');
