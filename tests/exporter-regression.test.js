@@ -76,7 +76,7 @@ test('content extractor preserves meaningful rendered SVG diagrams', () => {
   assert.match(source, /shapeCount >= 8/);
 });
 
-test('PDF renderer accepts data-image diagrams and uses diagram-aware code formatting', () => {
+test('PDF renderer keeps image diagrams and character diagrams as distinct semantic nodes', () => {
   const diagram = [{
     id: 'turn-diagram',
     index: 0,
@@ -87,10 +87,11 @@ test('PDF renderer accepts data-image diagrams and uses diagram-aware code forma
       markdown: '![Diagram](data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=)\n\n\`\`\`text\nA ──→ B\n     │\n     ▼\n     C\n\`\`\`'
     }]
   }];
-  const html = exporter.buildPrintHtml(data, diagram);
-  assert.match(html, /data:image\/svg\+xml;base64/);
-  assert.match(html, /diagram-wrap/);
-  assert.match(html, /diagram-code/);
+  const definition = exporter.buildPdfDefinition(data, diagram);
+  const raw = JSON.stringify(definition);
+  assert.match(raw, /cgxImage/);
+  assert.match(raw, /cgxPreformatted/);
+  assert.match(raw, /A ──→ B/);
 });
 
 test('professional PDF typography uses restrained document palette and standard point sizes', () => {
@@ -179,14 +180,18 @@ test('PDF supports Letter and Legal through semantic definition', () => {
   assert.equal(exporter.buildPdfDefinition(data, turns, { pageSize: 'Legal' }).pageSize, 'Legal');
 });
 
-test('multilingual PDF content uses focused fallback rather than whole-page rasterization', () => {
+test('multilingual PDF content remains selectable vector text', () => {
   const definition = exporter.buildPdfDefinition(data, turns);
   const raw = JSON.stringify(definition);
-  assert.match(raw, /cgxRasterText/);
+  assert.doesNotMatch(raw, /cgxRasterText/);
+  assert.match(raw, /cgxFont/);
 
   const workerSource = fs.readFileSync(require.resolve('../pdf-worker.js'), 'utf8');
-  assert.match(workerSource, /function rasterText/);
-  assert.doesNotMatch(workerSource, /document\.documentElement|scrollHeight|full[-_ ]?page|full[-_ ]?document/i);
+  assert.doesNotMatch(workerSource, /function rasterText|cgxRasterText/);
+  assert.match(workerSource, /NotoSinhala/);
+  assert.match(workerSource, /NotoTamil/);
+  assert.match(workerSource, /NotoKorean/);
+  assert.match(workerSource, /NotoEmoji/);
 });
 
 test('export menu lifecycle removes stale capture listeners and is instance-scoped', () => {
