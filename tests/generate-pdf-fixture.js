@@ -27,7 +27,14 @@ try {
 } catch (error) { fail('load-vfs', error); }
 
 if (!globalThis.CGX_PDF_EXTRA_FONTS) fail('extra-fonts', new Error('Multilingual PDF fonts did not load.'));
-pdfMake.fonts = Object.assign({}, pdfMake.fonts || {}, globalThis.CGX_PDF_EXTRA_FONTS);
+pdfMake.fonts = Object.assign({
+  Roboto: {
+    normal: 'Roboto-Regular.ttf',
+    bold: 'Roboto-Medium.ttf',
+    italics: 'Roboto-Italic.ttf',
+    bolditalics: 'Roboto-MediumItalic.ttf'
+  }
+}, pdfMake.fonts || {}, globalThis.CGX_PDF_EXTRA_FONTS);
 
 try {
   require('../math.js');
