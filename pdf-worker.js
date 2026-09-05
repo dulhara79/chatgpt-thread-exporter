@@ -505,6 +505,7 @@
       ok: true,
       found: true,
       ...state,
+      engineDebug: globalThis.__cgxPdfDebug || '',
       activeJobId: currentJobId
     };
   }
