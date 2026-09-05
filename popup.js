@@ -117,9 +117,24 @@ $('pdf').addEventListener('click', async () => {
   if (!turns.length) return;
   try {
     $('pdf').disabled = true;
-    setStatus('Preparing a professional PDF…');
-    const result = await exporter.exportPdf(state.data, turns, { pageSize: pageSize() });
-    setStatus('PDF ready: ' + (result?.filename || exporter.safeFilename(state.data.title || 'ChatGPT Conversation') + '.pdf'));
+    setStatus('Checking PDF size…');
+    const result = await exporter.exportPdf(state.data, turns, {
+      pageSize: pageSize(),
+      onProgress: progress => {
+        const labels = {
+          preflight: 'Checking PDF size…',
+          transfer: 'Sending PDF to local renderer…',
+          rendering: 'Rendering PDF pages…',
+          fonts: 'Loading PDF fonts…',
+          assets: 'Preparing PDF media…',
+          layout: 'Laying out PDF pages…',
+          'blob-ready': 'Opening Save As…',
+          download: 'Opening Save As…'
+        };
+        setStatus(labels[progress?.stage] || 'Rendering PDF…');
+      }
+    });
+    setStatus('Save As opened: ' + (result?.filename || exporter.safeFilename(state.data.title || 'ChatGPT Conversation') + '.pdf'));
   } catch (error) {
     setStatus(`PDF export failed: ${error?.message || error}`, true);
   } finally {
