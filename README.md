@@ -4,7 +4,8 @@ A local-only Chrome Manifest V3 extension for exporting ChatGPT conversations to
 
 ## V0.3.3 highlights
 
-- **PDF export now uses an MV3 offscreen document** instead of the previous hidden cross-origin iframe, eliminating the renderer handshake timeout while keeping the native Save As flow, no debugger banner, no visible tab, and no print preview.
+- **Long-thread PDF generation is now chunked by Q&A/answer blocks** instead of rasterizing the entire conversation into one giant canvas. This keeps memory bounded and substantially reduces export time for large conversations.
+- PDF export continues to use an MV3 offscreen document with native Save As, no debugger banner, no visible tab, and no print preview.
 - PDF, Word, and Markdown actions now use consistent professional SVG document icons instead of text-letter badges.
 - Export one Q&A or the complete rendered conversation.
 - Every assistant answer gets a self-healing download/export control. If ChatGPT React re-renders an action row and removes the control, the extension inserts it again.
@@ -46,7 +47,7 @@ Use the **Export** control beside the conversation header Share action. The exte
 
 ### PDF
 
-PDFs are generated locally inside an MV3 **offscreen document** using the bundled `html2pdf.js` engine, then passed to Chrome's Downloads API with `saveAs: true`. This avoids the previous webpage-to-extension iframe handshake entirely. Clicking **PDF** prepares the document and opens the native **Save As** dialog without debugger mode, a visible browser tab, or print preview. The generated blob stays alive until Chrome reports the download complete or interrupted. The suggested filename is the conversation title, and A4 remains the default page size.
+PDFs are generated locally inside an MV3 **offscreen document**. V0.3.5 no longer sends the whole conversation through one full-height html2canvas render. Instead it renders bounded Q&A/answer fragments, appends them into one paginated jsPDF document, releases each canvas immediately, and adapts render scale for very long threads. This avoids the large-canvas memory/time spike while keeping the professional layout, equations, tables, code blocks, Unicode, and images. Chrome's Downloads API still opens native **Save As** with `saveAs: true`; the suggested filename is the conversation title and A4 remains the default page size.
 
 ### Word (.docx)
 
