@@ -93,11 +93,20 @@
 
   async function prepareRenderer() {
     const existed = await hasOffscreenDocument();
+    const existingWatchdog = await chrome.alarms.get(WATCHDOG_ALARM).catch(() => null);
+    if (existed && existingWatchdog) {
+      return {
+        ok: false,
+        busy: true,
+        watchdogMs: WATCHDOG_MS,
+        error: 'Another PDF export is still rendering. Please let it finish or retry after the renderer resets.'
+      };
+    }
+
     await ensureOffscreenDocument();
-    // Repeated clicks must not extend the life of an already-stuck renderer.
-    // A newly-created renderer gets a fresh watchdog; an existing renderer
-    // keeps its original deadline until it reaches the Blob boundary.
-    await armWatchdog({ replace: !existed });
+    // A stale alarm with no offscreen document must never kill a newly-created
+    // renderer. An idle reused renderer gets a fresh deadline for this job.
+    await armWatchdog({ replace: true });
     return { ok: true, watchdogMs: WATCHDOG_MS, reused: existed };
   }
 
