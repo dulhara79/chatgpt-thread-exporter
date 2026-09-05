@@ -285,7 +285,7 @@ test('large SVG is capped before base64 serialization', () => {
 test('V0.5 manifest uses alarms watchdog and BLOBS-capable offscreen renderer', () => {
   const manifest = JSON.parse(fs.readFileSync(require.resolve('../manifest.json'), 'utf8'));
   const backgroundSource = fs.readFileSync(require.resolve('../background.js'), 'utf8');
-  assert.equal(manifest.version, '0.5.0');
+  assert.equal(manifest.version, '0.5.1');
   assert.equal(manifest.permissions.includes('alarms'), true);
   assert.match(backgroundSource, /'BLOBS'/);
 });
