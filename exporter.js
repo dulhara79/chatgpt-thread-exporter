@@ -413,35 +413,131 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
 </html>`;
   }
 
+  function pdfTextNode(text, extra = {}) {
+    const value = String(text || '');
+    if (/[^\u0000-\u024F\u2000-\u206F\u2190-\u22FF]/u.test(value) || /\$|\\\(|\\\[|\\frac|\\sqrt|\\sum|\\int/.test(value)) {
+      return { cgxRasterText: value, ...extra };
+    }
+    return { text: value, ...extra };
+  }
+
+  function buildPdfDefinition(data, turns, options = {}) {
+    const pageSize = normalizePageSize(options.pageSize || 'A4');
+    const title = documentTitle(data, turns);
+    const content = [{ text: title, style: 'title', margin: [0, 0, 0, 16] }];
+
+    const pushBlocks = markdown => {
+      for (const block of parseMarkdownBlocks(markdown)) {
+        if (block.type === 'blank') continue;
+        if (block.type === 'heading') {
+          content.push(pdfTextNode(block.text, { style: block.level <= 2 ? 'h2' : 'h3', margin: [0, 8, 0, 5] }));
+        } else if (block.type === 'text') {
+          content.push(pdfTextNode(block.text, { margin: [0, 0, 0, 7], lineHeight: 1.28 }));
+        } else if (block.type === 'quote') {
+          content.push(pdfTextNode(block.text, { margin: [10, 4, 8, 8], color: '#405268', background: '#F8FAFC' }));
+        } else if (block.type === 'rule') {
+          content.push({ canvas: [{ type: 'line', x1: 0, y1: 0, x2: 480, y2: 0, lineWidth: 0.5, lineColor: '#D1D5DB' }], margin: [0, 5, 0, 8] });
+        } else if (block.type === 'code') {
+          content.push({ text: block.text || '', fontSize: 8.5, lineHeight: 1.2, background: '#F4F6F8', margin: [7, 6, 7, 8] });
+        } else if (block.type === 'list') {
+          const item = pdfTextNode(block.text);
+          content.push(block.ordered
+            ? { ol: [item], start: block.marker || 1, margin: [15, 0, 0, 5] }
+            : { ul: [item], margin: [15, 0, 0, 5] });
+        } else if (block.type === 'table') {
+          const rows = block.rows.map((row, rowIndex) => row.map(cell => pdfTextNode(cell, {
+            bold: rowIndex === 0,
+            fillColor: rowIndex === 0 ? '#EEF3F8' : undefined,
+            margin: [3, 3, 3, 3]
+          })));
+          content.push({
+            table: { headerRows: 1, widths: Array(block.rows[0]?.length || 1).fill('*'), body: rows },
+            layout: 'lightHorizontalLines',
+            fontSize: 8.5,
+            margin: [0, 4, 0, 9]
+          });
+        }
+      }
+    };
+
+    turns.forEach((turn, idx) => {
+      const n = Number.isFinite(turn.index) ? turn.index + 1 : idx + 1;
+      content.push({ text: 'QUESTION ' + String(n).padStart(2, '0'), style: 'label', margin: [0, 8, 0, 5] });
+
+      const qStart = content.length;
+      pushBlocks(turn.question.markdown || turn.question.text || '');
+      const qBlocks = content.splice(qStart);
+      content.push({
+        table: { widths: [3, '*'], body: [['', { stack: qBlocks, margin: [9, 7, 8, 3] }]] },
+        layout: { fillColor: () => '#F7F9FC', hLineWidth: () => 0, vLineWidth: i => i === 1 ? 1.1 : 0, vLineColor: () => '#2E5B88' },
+        margin: [0, 0, 0, 10]
+      });
+
+      const answers = (turn.answers || []).filter(a => a.text || a.markdown);
+      answers.forEach((answer, answerIndex) => {
+        content.push({
+          text: answers.length > 1 ? 'ANSWER ' + String(answerIndex + 1).padStart(2, '0') : 'ANSWER',
+          style: 'answerLabel',
+          margin: [0, 5, 0, 5]
+        });
+        pushBlocks(answer.markdown || answer.text || '');
+      });
+
+      if (idx < turns.length - 1) {
+        content.push({ canvas: [{ type: 'line', x1: 0, y1: 0, x2: 480, y2: 0, lineWidth: 0.45, lineColor: '#D8E1EB' }], margin: [0, 8, 0, 10] });
+      }
+    });
+
+    return {
+      pageSize,
+      pageMargins: [51, 51, 51, 55],
+      info: { title, subject: 'ChatGPT conversation export', creator: APP_NAME },
+      defaultStyle: { font: 'Roboto', fontSize: 10.5, color: '#243142', lineHeight: 1.24 },
+      styles: {
+        title: { fontSize: 23, bold: true, color: '#183B56' },
+        h2: { fontSize: 14, bold: true, color: '#183B56' },
+        h3: { fontSize: 12, bold: true, color: '#264C70' },
+        label: { fontSize: 8.2, bold: true, color: '#5A6B7E', characterSpacing: 0.8 },
+        answerLabel: { fontSize: 8.2, bold: true, color: '#1E3A5F', characterSpacing: 0.8 }
+      },
+      footer: (currentPage, pageCount) => ({
+        columns: [
+          { text: APP_NAME, alignment: 'left' },
+          { text: 'Page ' + currentPage + ' of ' + pageCount, alignment: 'right' }
+        ],
+        margin: [51, 10, 51, 0],
+        fontSize: 8,
+        color: '#64748B'
+      }),
+      content
+    };
+  }
+
   async function exportPdf(data, turns, options = {}) {
     const pageSize = normalizePageSize(options.pageSize || 'A4');
-    const html = buildPrintHtml(data, turns, { ...options, pageSize });
+    const definition = buildPdfDefinition(data, turns, { ...options, pageSize });
     const filename = safeFilename(data?.title || 'ChatGPT Conversation');
 
     if (!globalThis.chrome?.runtime?.sendMessage) {
       throw new Error('PDF export is only available inside the Chrome extension.');
     }
 
-    const timeoutMs = Math.max(30000, Number(options.timeoutMs || 90000));
+    const timeoutMs = Math.max(30000, Number(options.timeoutMs || 60000));
     let timeoutId;
 
     const response = await Promise.race([
       chrome.runtime.sendMessage({
         type: 'CGX_EXPORT_PDF',
-        html,
+        definition,
         filename,
         pageSize
       }),
       new Promise((_, reject) => {
-        timeoutId = setTimeout(() => {
-          reject(new Error('PDF generation timed out. Reload the extension and try again.'));
-        }, timeoutMs);
+        timeoutId = setTimeout(() => reject(new Error('PDF generation timed out. Please try again.')), timeoutMs);
       })
     ]).finally(() => clearTimeout(timeoutId));
 
-    if (!response?.ok) {
-      throw new Error(response?.error || 'PDF generation failed.');
-    }
+    if (!response?.ok) throw new Error(response?.error || 'PDF generation failed.');
     return response;
   }
 
@@ -882,6 +978,7 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
     createMarkdown,
     createDocxBlob,
     buildPrintHtml,
+    buildPdfDefinition,
     exportMarkdown,
     exportDocx,
     exportPdf,
