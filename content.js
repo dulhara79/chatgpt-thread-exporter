@@ -265,14 +265,17 @@
 
   function findActionToolbar(assistantNode) {
     const container = messageContainer(assistantNode);
-    if (!container) return null;
+    if (!container || !visible(container)) return null;
 
     const buttons = Array.from(container.querySelectorAll('button')).filter(button =>
-      !button.closest('[data-cgx-ui]') && !button.classList.contains(EXPORT_BUTTON_CLASS)
+      visible(button) &&
+      !button.closest('[data-cgx-ui]') &&
+      !button.closest('pre, code, .markdown, [class*="markdown"]') &&
+      !button.classList.contains(EXPORT_BUTTON_CLASS)
     );
     if (!buttons.length) return null;
 
-    const known = buttons.find(button => /copy|read aloud|good response|bad response|regenerate|retry|more/.test(actionLabel(button)));
+    const known = buttons.find(button => /^(copy|read aloud|good response|bad response|regenerate|retry|more)(\b|\s|$)/.test(actionLabel(button)));
     const seeds = known ? [known, ...buttons] : buttons;
     let best = null;
     let bestScore = -Infinity;
@@ -281,9 +284,15 @@
       let current = seed.parentElement;
       let depth = 0;
       while (current && current !== container && depth < 5) {
-        const directButtons = Array.from(current.querySelectorAll(':scope > button, :scope > div > button')).filter(button => !button.closest('[data-cgx-ui]'));
-        const allButtons = Array.from(current.querySelectorAll('button')).filter(button => !button.closest('[data-cgx-ui]'));
-        const count = directButtons.length || allButtons.length;
+        if (!visible(current) || current.closest('pre, code')) {
+          current = current.parentElement;
+          depth += 1;
+          continue;
+        }
+        const allButtons = Array.from(current.querySelectorAll('button')).filter(button =>
+          visible(button) && !button.closest('[data-cgx-ui]') && !button.closest('pre, code')
+        );
+        const count = allButtons.length;
         if (count >= 1 && count <= 12) {
           const rect = current.getBoundingClientRect();
           const answerRect = assistantNode.getBoundingClientRect();
@@ -297,7 +306,7 @@
         depth += 1;
       }
     }
-    return best ? { toolbar: best, container } : null;
+    return best && visible(best) ? { toolbar: best, container } : null;
   }
 
   function createOwnedButton(className, label, iconSize, withText = false) {
@@ -314,24 +323,48 @@
     return button;
   }
 
-  function createInlineExportButton(assistantNode) {
+  function turnKeyForAssistant(assistantNode) {
+    const container = messageContainer(assistantNode);
+    const messageId = container?.getAttribute?.('data-message-id') || assistantNode.getAttribute('data-message-id');
+    if (messageId) return 'message:' + messageId;
+    const testId = container?.getAttribute?.('data-testid');
+    if (testId) return 'testid:' + testId;
+    const assistants = Array.from(document.querySelectorAll(ASSISTANT_SELECTOR));
+    return 'index:' + Math.max(0, assistants.indexOf(assistantNode));
+  }
+
+  function resolveAssistantByKey(key) {
+    if (!key) return null;
+    for (const assistant of document.querySelectorAll(ASSISTANT_SELECTOR)) {
+      if (turnKeyForAssistant(assistant) === key) return assistant;
+    }
+    return null;
+  }
+
+  function createInlineExportButton(turnKey) {
     const button = createOwnedButton(EXPORT_BUTTON_CLASS, 'Export this question and answer', 18, false);
-    button.__cgxAssistantNode = assistantNode;
+    button.dataset.cgxTurnKey = turnKey;
     button.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
-      showExportMenu(button, 'Export this Q&A', () => extractSingleTurn(assistantNode));
+      showExportMenu(button, 'Export this Q&A', () => {
+        const currentAssistant = resolveAssistantByKey(button.dataset.cgxTurnKey);
+        if (!currentAssistant) throw new Error('This answer changed while the export menu was open. Please try again.');
+        return extractSingleTurn(currentAssistant);
+      });
     });
     return button;
   }
 
-  function ensureFallbackRow(container, assistantNode) {
-    let row = container.querySelector(':scope > .cgx-fallback-actions, .cgx-fallback-actions[data-cgx-answer-actions]');
+  function ensureFallbackRow(container, assistantNode, turnKey) {
+    let row = Array.from(container.querySelectorAll('.cgx-fallback-actions[data-cgx-answer-actions]'))
+      .find(candidate => candidate.dataset.cgxTurnKey === turnKey);
     if (!row) {
       row = document.createElement('div');
       row.className = 'cgx-fallback-actions';
       row.setAttribute('data-cgx-ui', 'true');
       row.setAttribute('data-cgx-answer-actions', 'true');
+      row.dataset.cgxTurnKey = turnKey;
       const body = findMessageBody(assistantNode);
       const placement = body?.parentElement && container.contains(body.parentElement) ? body.parentElement : assistantNode;
       if (placement?.parentElement) placement.insertAdjacentElement('afterend', row);
@@ -340,27 +373,37 @@
     return row;
   }
 
-  function decorateAnswers() {
-    document.querySelectorAll(ASSISTANT_SELECTOR).forEach(assistantNode => {
-      const container = messageContainer(assistantNode);
-      if (!container) return;
+  function decorateAnswer(assistantNode) {
+    if (!(assistantNode instanceof Element) || !assistantNode.isConnected) return;
+    const container = messageContainer(assistantNode);
+    if (!container) return;
 
-      let existing = Array.from(container.querySelectorAll('.' + EXPORT_BUTTON_CLASS)).find(button => button.__cgxAssistantNode === assistantNode);
-      container.querySelectorAll('.' + EXPORT_BUTTON_CLASS).forEach(button => {
-        if (button !== existing && button.__cgxAssistantNode !== assistantNode) button.remove();
-      });
-
-      const found = findActionToolbar(assistantNode);
-      if (!existing) existing = createInlineExportButton(assistantNode);
-
-      if (found?.toolbar) {
-        if (existing.parentElement !== found.toolbar) found.toolbar.appendChild(existing);
-        container.querySelectorAll('.cgx-fallback-actions[data-cgx-answer-actions]').forEach(row => { if (!row.children.length) row.remove(); });
-      } else {
-        const fallback = ensureFallbackRow(container, assistantNode);
-        if (existing.parentElement !== fallback) fallback.appendChild(existing);
-      }
+    const turnKey = turnKeyForAssistant(assistantNode);
+    const buttons = Array.from(container.querySelectorAll('.' + EXPORT_BUTTON_CLASS));
+    let existing = buttons.find(button => button.dataset.cgxTurnKey === turnKey) || null;
+    buttons.forEach(button => {
+      if (button !== existing && button.dataset.cgxTurnKey === turnKey) button.remove();
     });
+
+    const found = findActionToolbar(assistantNode);
+    if (!existing) existing = createInlineExportButton(turnKey);
+
+    if (found?.toolbar && visible(found.toolbar)) {
+      if (existing.parentElement !== found.toolbar) found.toolbar.appendChild(existing);
+      container.querySelectorAll('.cgx-fallback-actions[data-cgx-answer-actions]').forEach(row => {
+        if (row.dataset.cgxTurnKey === turnKey && !row.children.length) row.remove();
+      });
+    } else {
+      const fallback = ensureFallbackRow(container, assistantNode, turnKey);
+      if (existing.parentElement !== fallback) fallback.appendChild(existing);
+    }
+  }
+
+  function decorateAnswers(root = document) {
+    const assistants = new Set();
+    if (root instanceof Element && root.matches(ASSISTANT_SELECTOR)) assistants.add(root);
+    if (root?.querySelectorAll) root.querySelectorAll(ASSISTANT_SELECTOR).forEach(node => assistants.add(node));
+    assistants.forEach(decorateAnswer);
   }
 
   function findShareButton() {
@@ -439,7 +482,8 @@
       }
     }
 
-    if (button.isConnected) return;
+    if (button.isConnected && visible(button)) return;
+    if (button.isConnected) button.remove();
     const fallback = findHeaderActionFallback();
     if (fallback) fallback.element.appendChild(button);
   }
@@ -566,20 +610,69 @@
     }, 3200);
   }
 
-  let decorateTimer = null;
-  function scheduleDecorate() {
-    clearTimeout(decorateTimer);
-    decorateTimer = setTimeout(() => {
-      decorateAnswers();
-      decorateThreadHeader();
-    }, 180);
+  const pendingAnswerRoots = new Set();
+  let fullDecorationRequested = false;
+  let decorateFrame = 0;
+  let decorateDeadline = 0;
+
+  function queueAnswerRoot(node) {
+    if (!(node instanceof Element)) return;
+    const assistant = node.matches(ASSISTANT_SELECTOR) ? node : node.closest?.(ASSISTANT_SELECTOR);
+    if (assistant) {
+      pendingAnswerRoots.add(assistant);
+      return;
+    }
+    const container = node.closest?.('article, [data-testid^="conversation-turn"], [data-message-id]');
+    const containedAssistant = container?.querySelector?.(ASSISTANT_SELECTOR);
+    if (containedAssistant) pendingAnswerRoots.add(containedAssistant);
+    node.querySelectorAll?.(ASSISTANT_SELECTOR).forEach(item => pendingAnswerRoots.add(item));
+  }
+
+  function flushDecorations() {
+    if (decorateFrame) cancelAnimationFrame(decorateFrame);
+    decorateFrame = 0;
+    if (decorateDeadline) clearTimeout(decorateDeadline);
+    decorateDeadline = 0;
+
+    if (fullDecorationRequested) {
+      fullDecorationRequested = false;
+      pendingAnswerRoots.clear();
+      decorateAnswers(document);
+    } else {
+      const roots = Array.from(pendingAnswerRoots);
+      pendingAnswerRoots.clear();
+      roots.forEach(decorateAnswer);
+    }
+    decorateThreadHeader();
+  }
+
+  function requestDecorationFlush() {
+    if (!decorateFrame) decorateFrame = requestAnimationFrame(flushDecorations);
+    if (!decorateDeadline) decorateDeadline = setTimeout(flushDecorations, 250);
+  }
+
+  function scheduleDecorate(input = null) {
+    if (Array.isArray(input)) {
+      for (const mutation of input) {
+        queueAnswerRoot(mutation.target);
+        mutation.addedNodes?.forEach(node => queueAnswerRoot(node));
+      }
+    } else {
+      fullDecorationRequested = true;
+    }
+    requestDecorationFlush();
   }
 
   const observer = new MutationObserver(scheduleDecorate);
-  observer.observe(document.documentElement, { childList: true, subtree: true });
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class', 'style', 'hidden', 'aria-hidden', 'data-state']
+  });
 
-  window.addEventListener('popstate', scheduleDecorate);
-  window.addEventListener('hashchange', scheduleDecorate);
+  window.addEventListener('popstate', () => scheduleDecorate());
+  window.addEventListener('hashchange', () => scheduleDecorate());
   scheduleDecorate();
 
   // Keep popup compatibility / fallback export UI.

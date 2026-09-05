@@ -154,7 +154,7 @@ test('PDF export uses an offscreen vector worker with direct Save As and no debu
   assert.match(backgroundSource, /pdf-worker\.html/);
   assert.match(backgroundSource, /chrome\.downloads\.download/);
   assert.match(backgroundSource, /saveAs: true/);
-  assert.match(backgroundSource, /renderQueue/);
+  assert.match(backgroundSource, /jobQueue/);
   assert.match(workerSource, /pdfMake\.createPdf/);
   assert.match(workerSource, /URL\.createObjectURL/);
 
@@ -203,9 +203,66 @@ test('export menu lifecycle removes stale capture listeners and is instance-scop
   assert.doesNotMatch(contentSource, /document\.removeEventListener\('pointerdown', outside, true\)/);
 });
 
-test('PDF caller has a bounded wait instead of an indefinite Preparing PDF state', () => {
+test('PDF caller timeout cancels the exact job instead of abandoning it', () => {
   const exporterSource = fs.readFileSync(require.resolve('../exporter.js'), 'utf8');
-  assert.match(exporterSource, /Promise\.race/);
-  assert.match(exporterSource, /timeoutMs/);
-  assert.match(exporterSource, /PDF generation timed out/);
+  const backgroundSource = fs.readFileSync(require.resolve('../background.js'), 'utf8');
+  assert.match(exporterSource, /jobId/);
+  assert.match(exporterSource, /CGX_CANCEL_PDF/);
+  assert.match(exporterSource, /safety deadline and was cancelled/);
+  assert.match(backgroundSource, /cancelJob/);
+  assert.match(backgroundSource, /resetOffscreenDocument/);
+  assert.match(backgroundSource, /closeDocument/);
+  assert.doesNotMatch(backgroundSource, /renderQueue\s*=\s*Promise\.resolve/);
+});
+
+
+test('active vector PDF path uses structural math nodes', () => {
+  const equationTurns = [{
+    id: 'turn-pdf-equation',
+    index: 0,
+    question: { role: 'user', text: 'Equation', markdown: 'Equation' },
+    answers: [{
+      role: 'assistant',
+      text: 'Equation',
+      markdown: '$$\\frac{x^2+1}{\\sqrt{y}} = \\sum_{i=1}^{n} i$$'
+    }]
+  }];
+  const definition = exporter.buildPdfDefinition(data, equationTurns);
+  const raw = JSON.stringify(definition);
+  assert.match(raw, /cgxMath/);
+  const workerSource = fs.readFileSync(require.resolve('../pdf-worker.js'), 'utf8');
+  assert.match(workerSource, /ChatGPTMath\?\.parseTex/);
+  assert.match(workerSource, /mathNodeToPdf/);
+  assert.match(workerSource, /node\.type === 'frac'/);
+});
+
+test('PDF media work is bounded by timeout, size, total budget, and concurrency', () => {
+  const workerSource = fs.readFileSync(require.resolve('../pdf-worker.js'), 'utf8');
+  assert.match(workerSource, /IMAGE_TIMEOUT_MS/);
+  assert.match(workerSource, /MAX_IMAGE_BYTES/);
+  assert.match(workerSource, /MAX_TOTAL_MEDIA_BYTES/);
+  assert.match(workerSource, /MAX_IMAGE_CONCURRENCY/);
+  assert.match(workerSource, /AbortController/);
+});
+
+test('answer control recovery observes React visibility changes and uses stable turn keys', () => {
+  const source = fs.readFileSync(require.resolve('../content.js'), 'utf8');
+  assert.match(source, /turnKeyForAssistant/);
+  assert.match(source, /resolveAssistantByKey/);
+  assert.match(source, /attributeFilter: \['class', 'style', 'hidden', 'aria-hidden', 'data-state'\]/);
+  assert.match(source, /requestAnimationFrame\(flushDecorations\)/);
+  assert.match(source, /visible\(found\.toolbar\)/);
+  assert.match(source, /!button\.closest\('pre, code, \.markdown/);
+});
+
+test('escaped pipes stay inside one Markdown table cell', () => {
+  const tableTurns = [{
+    id: 'table',
+    index: 0,
+    question: { role: 'user', text: 'Table', markdown: 'Table' },
+    answers: [{ role: 'assistant', text: 'A | B', markdown: '| Col | Value |\n| --- | --- |\n| A | one \\| two |' }]
+  }];
+  const definition = exporter.buildPdfDefinition(data, tableTurns);
+  const raw = JSON.stringify(definition);
+  assert.match(raw, /one \\| two|one \| two/);
 });
