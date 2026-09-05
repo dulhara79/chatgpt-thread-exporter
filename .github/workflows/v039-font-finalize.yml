@@ -98,4 +98,5 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add vendor/vfs_extra_fonts.js
           git commit -m 'chore: finalize self-contained PDF fonts [v039-fonts-final]'
+          git pull --rebase origin fix/pdf-selectable-content-v039
           git push origin HEAD:fix/pdf-selectable-content-v039
