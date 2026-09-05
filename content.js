@@ -464,9 +464,14 @@
   }
 
   function formatIcon(format) {
-    if (format === 'pdf') return '<span class="cgx-format-badge cgx-format-pdf">PDF</span>';
-    if (format === 'docx') return '<span class="cgx-format-badge cgx-format-docx">W</span>';
-    return '<span class="cgx-format-badge cgx-format-md">MD</span>';
+    const common = 'viewBox="0 0 24 24" aria-hidden="true" focusable="false"';
+    if (format === 'pdf') {
+      return '<span class="cgx-format-icon cgx-format-pdf"><svg ' + common + '><path d="M6.75 2.75h7.2L18.5 7.3v13.95H6.75z"/><path d="M13.95 2.75V7.3h4.55"/><path d="M8.8 14.75h6.4M8.8 17.25h4.7"/></svg></span>';
+    }
+    if (format === 'docx') {
+      return '<span class="cgx-format-icon cgx-format-docx"><svg ' + common + '><path d="M7.1 2.75h7.1l4.25 4.25v14.25H7.1z"/><path d="M14.2 2.75V7h4.25"/><path d="M4.1 9.2h6.9v9.2H4.1z"/><path d="m5.6 11 1.25 5.5 1.2-3.75 1.2 3.75L10.5 11"/></svg></span>';
+    }
+    return '<span class="cgx-format-icon cgx-format-md"><svg ' + common + '><path d="M5.5 3.25h13v17.5h-13z"/><path d="M8 9.1v5.8M8 9.1l2.1 2.7 2.1-2.7v5.8M14.1 11.1l1.9 2.25 1.9-2.25M16 13.35V9.1"/></svg></span>';
   }
 
   function showExportMenu(anchor, heading, dataProvider) {
