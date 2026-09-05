@@ -26,14 +26,34 @@ try {
     timeout:10000
   });
 
-  const result = await page.evaluate(async () => {
+  const prepared = await page.evaluate(async () => {
     const jobId = 'browser-smoke-' + Date.now();
-    const prepared = await chrome.runtime.sendMessage({
+    globalThis.__cgxSmokeJobId = jobId;
+    return chrome.runtime.sendMessage({
       type: 'CGX_PREPARE_PDF_WORKER',
       jobId
     });
-    if (!prepared?.ok) return { prepared, rendered:null };
+  });
+  process.stdout.write('Prepare result: ' + JSON.stringify(prepared) + '\n');
+  if (!prepared?.ok) {
+    throw new Error('Real Chrome could not prepare offscreen renderer: ' + JSON.stringify(prepared));
+  }
 
+  const offscreenTarget = await browser.waitForTarget(
+    item => item.url().endsWith('/pdf-worker.html'),
+    { timeout:10000 }
+  );
+  process.stdout.write('Offscreen target: ' + offscreenTarget.type() + ' ' + offscreenTarget.url() + '\n');
+  try {
+    const offscreenPage = await offscreenTarget.asPage();
+    offscreenPage?.on('console', msg => process.stdout.write('[offscreen console] ' + msg.text() + '\n'));
+    offscreenPage?.on('pageerror', error => process.stdout.write('[offscreen error] ' + error.message + '\n'));
+  } catch (error) {
+    process.stdout.write('Could not attach offscreen diagnostics: ' + error.message + '\n');
+  }
+
+  const rendered = await page.evaluate(async () => {
+    const jobId = globalThis.__cgxSmokeJobId;
     const definition = {
       pageSize: 'A4',
       pageMargins: [51, 51, 51, 55],
@@ -49,21 +69,21 @@ try {
         ]
       }, {
         cgxPreformatted: {
-          text:'Clinician App\n    │\n    ▼\nCentral Backend',
+          text:'Clinician App\\n    │\\n    ▼\\nCentral Backend',
           diagram:true,
           language:'text'
         }
       }]
     };
-
-    const rendered = await chrome.runtime.sendMessage({
+    return chrome.runtime.sendMessage({
       target: 'cgx-offscreen-pdf',
       type: 'CGX_OFFSCREEN_SMOKE_RENDER',
       jobId,
       definition
     });
-    return { prepared, rendered };
   });
+  process.stdout.write('Render result: ' + JSON.stringify(rendered) + '\n');
+  const result = { prepared, rendered };
 
   if (!result?.prepared?.ok) {
     throw new Error('Real Chrome could not prepare offscreen renderer: ' + JSON.stringify(result));
