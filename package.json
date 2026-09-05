@@ -3,7 +3,7 @@
   "version": "0.4.0",
   "private": true,
   "scripts": {
-    "test": "node --test tests/exporter-regression.test.js tests/pdf-fidelity-regression.test.js tests/pdf-font-smoke.test.js",
+    "test": "node --test tests/exporter-regression.test.js tests/pdf-fidelity-regression.test.js tests/pdf-font-smoke.test.js tests/pdf-lifecycle-regression.test.js",
     "check": "node --check math.js && node --check exporter.js && node --check content.js && node --check popup.js && node --check background.js && node --check pdf-worker.js"
   }
 }
