@@ -116,10 +116,14 @@ $('pdf').addEventListener('click', async () => {
   const turns = selectedTurns();
   if (!turns.length) return;
   try {
-    await exporter.exportPdf(state.data, turns, { pageSize: pageSize() });
-    setStatus('PDF downloaded as ' + exporter.safeFilename(state.data.title || 'ChatGPT Conversation') + '.pdf.');
+    $('pdf').disabled = true;
+    setStatus('Preparing a professional PDF…');
+    const result = await exporter.exportPdf(state.data, turns, { pageSize: pageSize() });
+    setStatus('PDF ready: ' + (result?.filename || exporter.safeFilename(state.data.title || 'ChatGPT Conversation') + '.pdf'));
   } catch (error) {
     setStatus(`PDF export failed: ${error?.message || error}`, true);
+  } finally {
+    updateCount();
   }
 });
 
