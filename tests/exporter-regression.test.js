@@ -176,6 +176,23 @@ test('PDF export uses MV3 offscreen rendering and native Save As without iframe/
   assert.doesNotMatch(contentSource, /cgx-format-badge[^\n]*>PDF<|cgx-format-badge[^\n]*>W<|cgx-format-badge[^\n]*>MD</);
 });
 
+
+test('long-thread PDF rendering is chunked instead of rasterizing the full document canvas', () => {
+  const rendererSource = fs.readFileSync(require.resolve('../pdf-renderer.js'), 'utf8');
+
+  assert.match(rendererSource, /collectRenderUnits/);
+  assert.match(rendererSource, /splitLargeSection/);
+  assert.match(rendererSource, /renderUnitCanvas/);
+  assert.match(rendererSource, /appendCanvas/);
+  assert.match(rendererSource, /MAX_SECTION_PX/);
+  assert.match(rendererSource, /renderScale/);
+  assert.match(rendererSource, /canvas\.width = 1/);
+  assert.match(rendererSource, /canvas\.height = 1/);
+
+  assert.doesNotMatch(rendererSource, /\.from\(element\)\s*\.toPdf\(\)/);
+  assert.doesNotMatch(rendererSource, /cleanRenderDocument\(html\)[\s\S]{0,600}\.from\(main\)/);
+});
+
 test('A4 remains the default PDF page size', () => {
   assert.equal(exporter.normalizePageSize(), 'A4');
   assert.match(exporter.buildPrintHtml(data, turns), /size: A4/);
