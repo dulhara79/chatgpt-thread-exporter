@@ -4,6 +4,9 @@
   const APP_NAME = 'ChatGPT Thread Exporter';
   const MIME_DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   const mathRenderer = globalThis.ChatGPTMath || null;
+  const MAX_PDF_SOURCE_BYTES = 24 * 1024 * 1024;
+  const MAX_PDF_DEFINITION_BYTES = 36 * 1024 * 1024;
+  const MAX_PDF_DEFINITION_NODES = 120000;
 
   const PAGE_SIZES = Object.freeze({
     A4: { css: 'A4', width: 11906, height: 16838 },
@@ -634,53 +637,121 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
     };
   }
 
-  async function exportPdf(data, turns, options = {}) {
-    const pageSize = normalizePageSize(options.pageSize || 'A4');
-    const definition = buildPdfDefinition(data, turns, { ...options, pageSize });
-    const filename = safeFilename(data?.title || 'ChatGPT Conversation');
+  function jsonByteLength(value) {
+    const json = JSON.stringify(value);
+    return new TextEncoder().encode(json).length;
+  }
 
+  function countPdfNodes(node) {
+    if (Array.isArray(node)) return 1 + node.reduce((sum, item) => sum + countPdfNodes(item), 0);
+    if (!node || typeof node !== 'object') return 1;
+    return 1 + Object.values(node).reduce((sum, value) => sum + countPdfNodes(value), 0);
+  }
+
+  function preflightPdfSource(data, turns) {
+    const bytes = jsonByteLength({
+      title: data?.title || '',
+      turns: turns || []
+    });
+    if (bytes > MAX_PDF_SOURCE_BYTES) {
+      throw new Error('This conversation is too large to export safely as one PDF. Remove very large embedded images/diagrams or export fewer Q&A turns.');
+    }
+    return { sourceBytes: bytes };
+  }
+
+  function preflightPdfDefinition(definition) {
+    const bytes = jsonByteLength(definition);
+    const nodes = countPdfNodes(definition);
+    if (bytes > MAX_PDF_DEFINITION_BYTES) {
+      throw new Error('The generated PDF definition is too large for Chrome extension messaging. Export fewer Q&A turns or remove very large embedded diagrams.');
+    }
+    if (nodes > MAX_PDF_DEFINITION_NODES) {
+      throw new Error('The conversation contains too many document elements for a reliable single PDF export. Export a smaller selection.');
+    }
+    return { definitionBytes: bytes, definitionNodes: nodes };
+  }
+
+  async function resetPdfRenderer() {
+    try {
+      await Promise.race([
+        chrome.runtime.sendMessage({ type: 'CGX_RESET_PDF_WORKER' }),
+        new Promise(resolve => setTimeout(resolve, 4000))
+      ]);
+    } catch {}
+  }
+
+  async function exportPdf(data, turns, options = {}) {
     if (!globalThis.chrome?.runtime?.sendMessage) {
       throw new Error('PDF export is only available inside the Chrome extension.');
     }
 
+    const sourceMetrics = preflightPdfSource(data, turns);
+    const pageSize = normalizePageSize(options.pageSize || 'A4');
+    const definition = buildPdfDefinition(data, turns, { ...options, pageSize });
+    const definitionMetrics = preflightPdfDefinition(definition);
+    const filename = safeFilename(data?.title || 'ChatGPT Conversation');
     const jobId = 'pdf-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
     const timeoutMs = Math.max(30000, Number(options.timeoutMs || 50000));
     let timeoutId = null;
     let timedOut = false;
 
+    const progressListener = request => {
+      if (request?.type !== 'CGX_PDF_PROGRESS' || request.jobId !== jobId) return;
+      try {
+        options.onProgress?.({
+          jobId,
+          stage: request.stage || '',
+          detail: request.detail || ''
+        });
+      } catch {}
+    };
+    chrome.runtime.onMessage.addListener(progressListener);
+
     try {
+      options.onProgress?.({ jobId, stage: 'preflight', detail: String(definitionMetrics.definitionBytes) });
+      const prepared = await chrome.runtime.sendMessage({
+        type: 'CGX_PREPARE_PDF_WORKER',
+        jobId
+      });
+      if (!prepared?.ok) throw new Error(prepared?.error || 'Could not prepare the local PDF renderer.');
+
+      options.onProgress?.({ jobId, stage: 'transfer', detail: String(definitionMetrics.definitionBytes) });
       const response = await Promise.race([
         chrome.runtime.sendMessage({
-          type: 'CGX_EXPORT_PDF',
+          target: 'cgx-offscreen-pdf',
+          type: 'CGX_OFFSCREEN_RENDER_PDF',
           jobId,
           definition,
           filename,
-          pageSize
+          pageSize,
+          metrics: {
+            ...sourceMetrics,
+            ...definitionMetrics
+          }
         }),
         new Promise((_, reject) => {
           timeoutId = setTimeout(() => {
             timedOut = true;
-            reject(new Error('PDF generation exceeded the safety deadline and was cancelled. Please retry.'));
+            reject(new Error('PDF rendering exceeded the safety deadline. The renderer was reset so the next export can start cleanly.'));
           }, timeoutMs);
         })
       ]);
 
-      if (!response?.ok) throw new Error(response?.error || 'PDF generation failed.');
-      if (response.jobId && response.jobId !== jobId) throw new Error('Received a stale PDF export response.');
+      if (!response?.ok) {
+        if (!response?.busy) await resetPdfRenderer();
+        throw new Error(response?.error || 'PDF generation failed.');
+      }
+      if (response.jobId !== jobId) {
+        await resetPdfRenderer();
+        throw new Error('Received a stale PDF export response.');
+      }
       return response;
     } catch (error) {
-      if (timedOut) {
-        try {
-          await chrome.runtime.sendMessage({
-            type: 'CGX_CANCEL_PDF',
-            jobId,
-            reason: 'Caller safety deadline exceeded.'
-          });
-        } catch {}
-      }
+      if (timedOut) await resetPdfRenderer();
       throw error;
     } finally {
       clearTimeout(timeoutId);
+      chrome.runtime.onMessage.removeListener(progressListener);
     }
   }
 
@@ -1128,6 +1199,8 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
     createDocxBlob,
     buildPrintHtml,
     buildPdfDefinition,
+    preflightPdfSource,
+    preflightPdfDefinition,
     exportMarkdown,
     exportDocx,
     exportPdf,
