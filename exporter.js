@@ -682,6 +682,48 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
     } catch {}
   }
 
+  function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  async function shortRuntimeMessage(message, timeoutMs = 1200) {
+    const marker = Symbol('timeout');
+    const result = await Promise.race([
+      chrome.runtime.sendMessage(message).catch(error => ({ __cgxError:error })),
+      delay(timeoutMs).then(() => marker)
+    ]);
+    if (result === marker) return { timedOut:true };
+    if (result?.__cgxError) throw result.__cgxError;
+    return { timedOut:false, response:result };
+  }
+
+  async function waitForPdfJob(jobId, overallTimeoutMs, options = {}) {
+    const startedAt = Date.now();
+    let lastStage = '';
+    while (Date.now() - startedAt < overallTimeoutMs) {
+      const check = await shortRuntimeMessage({
+        target:'cgx-offscreen-pdf',
+        type:'CGX_OFFSCREEN_PDF_STATUS',
+        jobId
+      }, 1000).catch(() => ({ timedOut:true }));
+
+      if (!check.timedOut && check.response?.found) {
+        const state = check.response.state || '';
+        if (state && state !== lastStage) {
+          lastStage = state;
+          try { options.onProgress?.({ jobId, stage:state, detail:'' }); } catch {}
+        }
+        if (state === 'done') return check.response.result;
+        if (state === 'error') {
+          throw new Error(check.response.error || 'The local PDF renderer failed.');
+        }
+      }
+
+      await delay(1250);
+    }
+    throw new Error('PDF rendering exceeded the safety deadline. The renderer was reset so the next export can start cleanly.');
+  }
+
   async function exportPdf(data, turns, options = {}) {
     if (!globalThis.chrome?.runtime?.sendMessage) {
       throw new Error('PDF export is only available inside the Chrome extension.');
@@ -694,66 +736,65 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
     const filename = safeFilename(data?.title || 'ChatGPT Conversation');
     const jobId = 'pdf-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
     const timeoutMs = Math.max(30000, Number(options.timeoutMs || 50000));
-    let timeoutId = null;
-    let timedOut = false;
 
     const progressListener = request => {
       if (request?.type !== 'CGX_PDF_PROGRESS' || request.jobId !== jobId) return;
       try {
         options.onProgress?.({
           jobId,
-          stage: request.stage || '',
-          detail: request.detail || ''
+          stage:request.stage || '',
+          detail:request.detail || ''
         });
       } catch {}
     };
     chrome.runtime.onMessage.addListener(progressListener);
 
     try {
-      options.onProgress?.({ jobId, stage: 'preflight', detail: String(definitionMetrics.definitionBytes) });
+      options.onProgress?.({ jobId, stage:'preflight', detail:String(definitionMetrics.definitionBytes) });
       const prepared = await chrome.runtime.sendMessage({
-        type: 'CGX_PREPARE_PDF_WORKER',
+        type:'CGX_PREPARE_PDF_WORKER',
         jobId
       });
-      if (!prepared?.ok) throw new Error(prepared?.error || 'Could not prepare the local PDF renderer.');
-
-      options.onProgress?.({ jobId, stage: 'transfer', detail: String(definitionMetrics.definitionBytes) });
-      options.onProgress?.({ jobId, stage: 'rendering', detail: '' });
-      const response = await Promise.race([
-        chrome.runtime.sendMessage({
-          target: 'cgx-offscreen-pdf',
-          type: 'CGX_OFFSCREEN_RENDER_PDF',
-          jobId,
-          definition,
-          filename,
-          pageSize,
-          metrics: {
-            ...sourceMetrics,
-            ...definitionMetrics
-          }
-        }),
-        new Promise((_, reject) => {
-          timeoutId = setTimeout(() => {
-            timedOut = true;
-            reject(new Error('PDF rendering exceeded the safety deadline. The renderer was reset so the next export can start cleanly.'));
-          }, timeoutMs);
-        })
-      ]);
-
-      if (!response?.ok) {
-        if (!response?.busy) await resetPdfRenderer();
-        throw new Error(response?.error || 'PDF generation failed.');
+      if (!prepared?.ok) {
+        throw new Error(prepared?.error || 'Could not prepare the local PDF renderer.');
       }
-      if (response.jobId !== jobId) {
+
+      options.onProgress?.({ jobId, stage:'transfer', detail:String(definitionMetrics.definitionBytes) });
+      const accepted = await chrome.runtime.sendMessage({
+        target:'cgx-offscreen-pdf',
+        type:'CGX_OFFSCREEN_START_PDF',
+        jobId,
+        definition,
+        filename,
+        pageSize,
+        metrics:{
+          ...sourceMetrics,
+          ...definitionMetrics
+        }
+      });
+
+      if (!accepted?.ok || !accepted.accepted) {
+        if (!accepted?.busy) await resetPdfRenderer();
+        throw new Error(accepted?.error || 'The local PDF renderer did not accept the job.');
+      }
+      if (accepted.jobId !== jobId) {
         await resetPdfRenderer();
-        throw new Error('Received a stale PDF export response.');
+        throw new Error('Received a stale PDF job acknowledgement.');
       }
-      return response;
+
+      options.onProgress?.({ jobId, stage:'rendering', detail:'' });
+      const result = await waitForPdfJob(jobId, timeoutMs, options);
+      if (!result || result.jobId !== jobId) {
+        await resetPdfRenderer();
+        throw new Error('The PDF renderer returned an invalid job result.');
+      }
+      return result;
     } catch (error) {
-      if (timedOut) await resetPdfRenderer();
+      if (/safety deadline/i.test(String(error?.message || error))) {
+        await resetPdfRenderer();
+      }
       throw error;
     } finally {
-      clearTimeout(timeoutId);
       chrome.runtime.onMessage.removeListener(progressListener);
     }
   }
