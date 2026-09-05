@@ -413,52 +413,207 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
 </html>`;
   }
 
+  function pdfFontForCodePoint(codePoint, previousFont = 'Roboto') {
+    if (codePoint >= 0x0D80 && codePoint <= 0x0DFF) return 'NotoSinhala';
+    if (codePoint >= 0x0B80 && codePoint <= 0x0BFF) return 'NotoTamil';
+    if (
+      (codePoint >= 0x1100 && codePoint <= 0x11FF) ||
+      (codePoint >= 0x3130 && codePoint <= 0x318F) ||
+      (codePoint >= 0xAC00 && codePoint <= 0xD7AF)
+    ) return 'NotoKorean';
+    if (
+      (codePoint >= 0x1F300 && codePoint <= 0x1FAFF) ||
+      (codePoint >= 0x2600 && codePoint <= 0x27BF)
+    ) return 'NotoEmoji';
+    if (
+      (codePoint >= 0x2500 && codePoint <= 0x259F) ||
+      (codePoint >= 0x2300 && codePoint <= 0x23FF)
+    ) return 'NotoMono';
+    if (
+      (codePoint >= 0x0300 && codePoint <= 0x036F) ||
+      codePoint === 0x200D ||
+      codePoint === 0xFE0F
+    ) return previousFont;
+    return 'Roboto';
+  }
+
+  function splitPdfFontRuns(text, base = {}) {
+    const runs = [];
+    let current = '';
+    let currentFont = base.font || 'Roboto';
+
+    const flush = () => {
+      if (!current) return;
+      runs.push({ ...base, text: current, font: currentFont });
+      current = '';
+    };
+
+    for (const char of Array.from(String(text || ''))) {
+      const codePoint = char.codePointAt(0);
+      const nextFont = pdfFontForCodePoint(codePoint, currentFont);
+      if (current && nextFont !== currentFont) flush();
+      currentFont = nextFont;
+      current += char;
+    }
+    flush();
+    return runs;
+  }
+
   function pdfTextNode(text, extra = {}) {
-    const value = String(text || '');
-    const tokens = parseInlineTokens(value);
-    const visible = tokens.filter(token => token.type !== 'image');
-    const plain = visible.map(token => token.text || '').join('');
-    const complex = /[^\u0000-\u024F\u2000-\u206F\u2190-\u22FF]/u.test(plain) || visible.some(token => token.type === 'math');
+    const tokens = parseInlineTokens(String(text || ''));
+    const runs = [];
 
-    if (complex) return { cgxRasterText: plain, ...extra };
+    for (const token of tokens) {
+      if (token.type === 'image') continue;
 
-    const runs = visible.map(token => {
-      const run = { text: token.text || '' };
-      if (token.type === 'bold') run.bold = true;
-      else if (token.type === 'italic') run.italics = true;
-      else if (token.type === 'code') { run.background = '#F1F5F9'; run.fontSize = 9; }
-      else if (token.type === 'link') { run.link = token.href || undefined; run.color = '#1E5A8A'; run.decoration = 'underline'; }
-      return run;
-    });
+      const style = {};
+      if (token.type === 'bold') style.bold = true;
+      else if (token.type === 'italic') style.italics = true;
+      else if (token.type === 'code') {
+        style.font = 'NotoMono';
+        style.background = '#F1F5F9';
+        style.fontSize = 9;
+        style.preserveLeadingSpaces = true;
+        style.preserveTrailingSpaces = true;
+      } else if (token.type === 'link') {
+        style.link = token.href || undefined;
+        style.color = '#1E5A8A';
+        style.decoration = 'underline';
+      } else if (token.type === 'math') {
+        style.italics = true;
+        style.color = '#1F2937';
+      }
+
+      runs.push(...splitPdfFontRuns(token.text || '', style));
+    }
+
     return { text: runs, ...extra };
   }
 
-  function pdfImageNodes(text) {
+  function pdfImageNodes(text, imageDataMap = {}) {
     return parseInlineTokens(text)
       .filter(token => token.type === 'image' && token.src && shouldIncludeImage({ src: token.src, alt: token.alt, width: 800, height: 500 }))
-      .map(token => ({ cgxImage: { src: token.src, alt: token.alt || 'Image' }, margin: [0, 4, 0, 8] }));
+      .map(token => ({
+        cgxImage: {
+          src: imageDataMap[token.src] || token.src,
+          originalSrc: token.src,
+          alt: token.alt || 'Image'
+        },
+        margin: [0, 4, 0, 8]
+      }));
+  }
+
+  function isDiagramBlock(block) {
+    const lang = String(block?.lang || '');
+    const text = String(block?.text || '');
+    return /^(?:mermaid|diagram|flowchart|graphviz|dot|plantuml|ascii|text)$/i.test(lang) ||
+      /[┌┐└┘├┤┬┴┼│─━┃╭╮╯╰▼▲►◄→←]/u.test(text);
+  }
+
+  function diagramFontSize(text) {
+    const longest = Math.max(1, ...String(text || '').split('\n').map(line => Array.from(line).length));
+    const contentWidth = 476;
+    const max = 8.5;
+    const min = 5.5;
+    return Math.max(min, Math.min(max, contentWidth / (longest * 0.62)));
+  }
+
+  async function fetchPdfImageAssets(turns) {
+    const found = new Map();
+    const imageRe = /!\[([^\]]*)\]\((https?:\/\/[^)]+|data:image\/[^)]+)\)/g;
+
+    for (const turn of turns) {
+      for (const message of [turn.question].concat(turn.answers || [])) {
+        const source = String(message?.markdown || '');
+        let match;
+        imageRe.lastIndex = 0;
+        while ((match = imageRe.exec(source))) {
+          const src = match[2];
+          if (!found.has(src) && shouldIncludeImage({ src, alt: match[1] || 'Image', width: 800, height: 500 })) {
+            found.set(src, { src, alt: match[1] || 'Image' });
+          }
+        }
+      }
+    }
+
+    const map = {};
+    const items = Array.from(found.values());
+
+    for (let offset = 0; offset < items.length; offset += 4) {
+      const batch = items.slice(offset, offset + 4);
+      await Promise.all(batch.map(async item => {
+        if (/^data:image\//i.test(item.src)) {
+          map[item.src] = item.src;
+          return;
+        }
+
+        try {
+          const response = await fetch(item.src, {
+            credentials: 'omit',
+            referrerPolicy: 'no-referrer',
+            cache: 'force-cache'
+          });
+          if (!response.ok) return;
+
+          const blob = await response.blob();
+          if (!/^image\//i.test(blob.type || '')) return;
+
+          const dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ''));
+            reader.onerror = () => reject(reader.error || new Error('Image conversion failed.'));
+            reader.readAsDataURL(blob);
+          });
+
+          if (dataUrl) map[item.src] = dataUrl;
+        } catch {}
+      }));
+    }
+
+    return map;
   }
 
   function buildPdfDefinition(data, turns, options = {}) {
     const pageSize = normalizePageSize(options.pageSize || 'A4');
     const title = documentTitle(data, turns);
-    const content = [{ text: title, style: 'title', margin: [0, 0, 0, 16] }];
+    const imageDataMap = options.imageDataMap || {};
+    const content = [pdfTextNode(title, { style: 'title', margin: [0, 0, 0, 16] })];
 
     const pushBlocks = markdown => {
       for (const block of parseMarkdownBlocks(markdown)) {
         if (block.type === 'blank') continue;
+
         if (block.type === 'heading') {
           content.push(pdfTextNode(block.text, { style: block.level <= 2 ? 'h2' : 'h3', margin: [0, 8, 0, 5] }));
         } else if (block.type === 'text') {
           const textNode = pdfTextNode(block.text, { margin: [0, 0, 0, 7], lineHeight: 1.28 });
-          if ((textNode.text && textNode.text.length) || textNode.cgxRasterText) content.push(textNode);
-          content.push(...pdfImageNodes(block.text));
+          if (textNode.text.length) content.push(textNode);
+          content.push(...pdfImageNodes(block.text, imageDataMap));
         } else if (block.type === 'quote') {
-          content.push(pdfTextNode(block.text, { margin: [10, 4, 8, 8], color: '#405268', background: '#F8FAFC' }));
+          content.push(pdfTextNode(block.text, {
+            margin: [10, 4, 8, 8],
+            color: '#405268',
+            background: '#F8FAFC'
+          }));
         } else if (block.type === 'rule') {
-          content.push({ canvas: [{ type: 'line', x1: 0, y1: 0, x2: 480, y2: 0, lineWidth: 0.5, lineColor: '#D1D5DB' }], margin: [0, 5, 0, 8] });
+          content.push({
+            canvas: [{ type: 'line', x1: 0, y1: 0, x2: 480, y2: 0, lineWidth: 0.5, lineColor: '#D1D5DB' }],
+            margin: [0, 5, 0, 8]
+          });
         } else if (block.type === 'code') {
-          content.push({ text: block.text || '', fontSize: 8.5, lineHeight: 1.2, background: '#F4F6F8', margin: [7, 6, 7, 8] });
+          const diagram = isDiagramBlock(block);
+          content.push({
+            text: block.text || '',
+            font: 'NotoMono',
+            fontSize: diagram ? diagramFontSize(block.text) : 8.5,
+            lineHeight: diagram ? 1.05 : 1.2,
+            background: '#F4F6F8',
+            margin: [7, 6, 7, 8],
+            preserveLeadingSpaces: true,
+            preserveTrailingSpaces: true,
+            noWrap: diagram,
+            cgxPreformattedDiagram: diagram
+          });
         } else if (block.type === 'list') {
           const item = pdfTextNode(block.text);
           content.push(block.ordered
@@ -487,8 +642,15 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
       const qStart = content.length;
       pushBlocks(turn.question.markdown || turn.question.text || '');
       const qBlocks = content.splice(qStart);
+
       content.push({
-        table: { widths: [3, '*'], body: [[{ text: '', fillColor: '#2E5B88' }, { stack: qBlocks, margin: [9, 7, 8, 3], fillColor: '#F7F9FC' }]] },
+        table: {
+          widths: [3, '*'],
+          body: [[
+            { text: '', fillColor: '#2E5B88' },
+            { stack: qBlocks, margin: [9, 7, 8, 3], fillColor: '#F7F9FC' }
+          ]]
+        },
         layout: 'noBorders',
         margin: [0, 0, 0, 10]
       });
@@ -504,7 +666,10 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
       });
 
       if (idx < turns.length - 1) {
-        content.push({ canvas: [{ type: 'line', x1: 0, y1: 0, x2: 480, y2: 0, lineWidth: 0.45, lineColor: '#D8E1EB' }], margin: [0, 8, 0, 10] });
+        content.push({
+          canvas: [{ type: 'line', x1: 0, y1: 0, x2: 480, y2: 0, lineWidth: 0.45, lineColor: '#D8E1EB' }],
+          margin: [0, 8, 0, 10]
+        });
       }
     });
 
@@ -526,7 +691,8 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
 
   async function exportPdf(data, turns, options = {}) {
     const pageSize = normalizePageSize(options.pageSize || 'A4');
-    const definition = buildPdfDefinition(data, turns, { ...options, pageSize });
+    const imageDataMap = await fetchPdfImageAssets(turns);
+    const definition = buildPdfDefinition(data, turns, { ...options, pageSize, imageDataMap });
     const filename = safeFilename(data?.title || 'ChatGPT Conversation');
 
     if (!globalThis.chrome?.runtime?.sendMessage) {
