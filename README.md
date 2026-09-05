@@ -1,8 +1,8 @@
-# ChatGPT Thread Exporter — V0.5.0
+# ChatGPT Thread Exporter — V0.5.1
 
 A local-only Chrome Manifest V3 extension for exporting ChatGPT conversations to professional PDF, Microsoft Word (`.docx`), and Markdown.
 
-## V0.5.0 highlights
+## V0.5.1 highlights
 
 - **PDF reliability is redesigned around an offscreen-owned render lifecycle.** The service worker is now a stateless offscreen/download bridge, a Chrome alarm hard-resets stuck pdfmake work, and the heavy PDF definition crosses runtime messaging only once. The selectable Unicode/diagram behavior from V0.3.9 is preserved.
 - PDF, Word, and Markdown actions now use consistent professional SVG document icons instead of text-letter badges.
@@ -105,8 +105,8 @@ The approved V0.3 design is documented at:
 
 ## Third-party component
 
-V0.5.0 bundles pdfmake 0.2.20 plus local open-source Noto fonts for Sinhala, Tamil, Korean, symbols/emoji, and monospace text. html2pdf.js/html2canvas are not used for PDF export.
+V0.5.1 bundles pdfmake 0.2.20 plus local open-source Noto fonts for Sinhala, Tamil, Korean, symbols/emoji, and monospace text. html2pdf.js/html2canvas are not used for PDF export.
 
 ## Version
 
-V0.5.0
+V0.5.1
