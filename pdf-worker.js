@@ -7,6 +7,7 @@
   const RENDER_FINISHED_MESSAGE = 'CGX_PDF_RENDER_FINISHED';
   const DOWNLOAD_STATE_MESSAGE = 'CGX_OFFSCREEN_DOWNLOAD_STATE';
   const PROGRESS_MESSAGE = 'CGX_PDF_PROGRESS';
+  const SMOKE_MESSAGE = 'CGX_OFFSCREEN_SMOKE_RENDER';
   const activeUrls = new Set();
   const pendingDownloads = new Map();
   let currentJobId = null;
@@ -512,6 +513,29 @@
     if (request.type === CLEANUP_MESSAGE) {
       sendResponse({ ok: true, released: releaseUrl(request.url) });
       return;
+    }
+
+    if (request.type === SMOKE_MESSAGE) {
+      const jobId = String(request.jobId || 'browser-smoke');
+      if (currentJobId) {
+        sendResponse({ ok:false, busy:true, jobId, activeJobId:currentJobId });
+        return;
+      }
+      currentJobId = jobId;
+      createPdfBlob(request.definition || { pageSize:'A4', content:[{ text:'Smoke test' }] }, jobId)
+        .then(async blob => {
+          const bytes = new Uint8Array(await blob.arrayBuffer());
+          await chrome.runtime.sendMessage({ type: RENDER_FINISHED_MESSAGE, jobId }).catch(() => {});
+          sendResponse({
+            ok:true,
+            jobId,
+            bytes:bytes.length,
+            magic:String.fromCharCode(...bytes.subarray(0, 4))
+          });
+        })
+        .catch(error => sendResponse({ ok:false, jobId, error:error instanceof Error ? error.message : String(error) }))
+        .finally(() => { currentJobId = null; });
+      return true;
     }
 
     if (request.type === DOWNLOAD_STATE_MESSAGE) {
