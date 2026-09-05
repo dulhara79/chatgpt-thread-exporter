@@ -83,15 +83,22 @@
     }
   }
 
-  async function armWatchdog() {
-    await chrome.alarms.clear(WATCHDOG_ALARM).catch(() => {});
+  async function armWatchdog({ replace = false } = {}) {
+    const existing = await chrome.alarms.get(WATCHDOG_ALARM).catch(() => null);
+    if (existing && !replace) return existing;
+    if (replace) await chrome.alarms.clear(WATCHDOG_ALARM).catch(() => {});
     chrome.alarms.create(WATCHDOG_ALARM, { when: Date.now() + WATCHDOG_MS });
+    return { name: WATCHDOG_ALARM };
   }
 
   async function prepareRenderer() {
+    const existed = await hasOffscreenDocument();
     await ensureOffscreenDocument();
-    await armWatchdog();
-    return { ok: true, watchdogMs: WATCHDOG_MS };
+    // Repeated clicks must not extend the life of an already-stuck renderer.
+    // A newly-created renderer gets a fresh watchdog; an existing renderer
+    // keeps its original deadline until it reaches the Blob boundary.
+    await armWatchdog({ replace: !existed });
+    return { ok: true, watchdogMs: WATCHDOG_MS, reused: existed };
   }
 
   async function startDownload(request) {
