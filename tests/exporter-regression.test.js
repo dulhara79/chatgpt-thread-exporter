@@ -182,7 +182,7 @@ test('long-thread PDF rendering is chunked instead of rasterizing the full docum
 
   assert.match(rendererSource, /collectRenderUnits/);
   assert.match(rendererSource, /splitLargeSection/);
-  assert.match(rendererSource, /renderUnitCanvas/);
+  assert.match(rendererSource, /renderBatchCanvas/);
   assert.match(rendererSource, /appendCanvas/);
   assert.match(rendererSource, /MAX_SECTION_PX/);
   assert.match(rendererSource, /renderScale/);
@@ -196,4 +196,28 @@ test('long-thread PDF rendering is chunked instead of rasterizing the full docum
 test('A4 remains the default PDF page size', () => {
   assert.equal(exporter.normalizePageSize(), 'A4');
   assert.match(exporter.buildPrintHtml(data, turns), /size: A4/);
+});
+
+
+test('V0.3.6 PDF renderer removes the full conversation before canvas capture and batches bounded units', () => {
+  const rendererSource = fs.readFileSync(require.resolve('../pdf-renderer.js'), 'utf8');
+
+  assert.match(rendererSource, /packRenderBatches/);
+  assert.match(rendererSource, /MAX_BATCH_PX/);
+  assert.match(rendererSource, /MAX_BATCH_UNITS/);
+  assert.match(rendererSource, /root\.replaceChildren\(\);[\s\S]{0,300}const scale = renderScale/);
+  assert.match(rendererSource, /renderBatchCanvas/);
+  assert.match(rendererSource, /renderBatchWithFallback/);
+  assert.match(rendererSource, /RENDER_WATCHDOG_MS/);
+  assert.match(rendererSource, /withWatchdog/);
+  assert.match(rendererSource, /root\.replaceChildren\(element\)/);
+  assert.match(rendererSource, /root\.replaceChildren\(\)/);
+  assert.doesNotMatch(rendererSource, /renderUnitCanvas/);
+});
+
+test('PDF caller has a bounded wait instead of an indefinite Preparing PDF state', () => {
+  const exporterSource = fs.readFileSync(require.resolve('../exporter.js'), 'utf8');
+  assert.match(exporterSource, /Promise\.race/);
+  assert.match(exporterSource, /timeoutMs/);
+  assert.match(exporterSource, /PDF generation timed out/);
 });

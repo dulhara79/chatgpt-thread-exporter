@@ -16,7 +16,11 @@
   const MARGIN_MM = 18;
   const UNIT_GAP_MM = 3;
   const MAX_SECTION_PX = 1350;
-  const MAX_FRAGMENT_PX = 950;
+  const MAX_FRAGMENT_PX = 900;
+  const MAX_BATCH_PX = 1800;
+  const MAX_BATCH_UNITS = 4;
+  const ASSET_WAIT_MS = 2500;
+  const RENDER_WATCHDOG_MS = 22000;
 
   function normalizePageSize(value) {
     const key = String(value || 'A4').toLowerCase();
@@ -45,16 +49,12 @@
 
     const runtimeStyle = document.createElement('style');
     runtimeStyle.dataset.cgxPdfStyle = 'true';
-    runtimeStyle.textContent = `
-      .cgx-pdf-fragment {
-        margin-bottom: 0 !important;
-        padding-bottom: 0 !important;
-        border-bottom: 0 !important;
-      }
-      .cgx-pdf-fragment .answer-header:first-child {
-        margin-top: 0 !important;
-      }
-    `;
+    runtimeStyle.textContent = [
+      '.cgx-pdf-fragment { margin-bottom: 0 !important; padding-bottom: 0 !important; border-bottom: 0 !important; }',
+      '.cgx-pdf-fragment .answer-header:first-child { margin-top: 0 !important; }',
+      '.cgx-pdf-batch { width: 100%; margin: 0; padding: 0; background: #fff; }',
+      '.cgx-pdf-batch > *:last-child { margin-bottom: 0 !important; }'
+    ].join('\n');
     document.head.appendChild(runtimeStyle);
 
     const main = parsed.querySelector('main.document');
@@ -64,9 +64,14 @@
     return root.querySelector('main.document');
   }
 
-  async function waitForAssets(container) {
+  async function waitForAssets(container, timeoutMs = ASSET_WAIT_MS) {
     try {
-      if (document.fonts?.ready) await document.fonts.ready;
+      if (document.fonts?.ready) {
+        await Promise.race([
+          document.fonts.ready,
+          new Promise(resolve => setTimeout(resolve, timeoutMs))
+        ]);
+      }
     } catch {}
 
     const images = Array.from(container.querySelectorAll('img'));
@@ -81,7 +86,7 @@
         };
         image.addEventListener('load', done, { once: true });
         image.addEventListener('error', done, { once: true });
-        setTimeout(done, 5000);
+        setTimeout(done, timeoutMs);
       });
     }));
 
@@ -110,6 +115,13 @@
     return wrapper;
   }
 
+  function unit(node, height) {
+    return {
+      node,
+      height: Math.max(40, Number(height || 0))
+    };
+  }
+
   function splitLargeSection(section) {
     const units = [];
     const label = section.querySelector(':scope > .section-label');
@@ -117,9 +129,16 @@
 
     if (label || question) {
       const intro = createSectionFragment();
-      if (label) intro.appendChild(label.cloneNode(true));
-      if (question) intro.appendChild(question.cloneNode(true));
-      units.push(intro);
+      let introHeight = 0;
+      if (label) {
+        intro.appendChild(label.cloneNode(true));
+        introHeight += elementHeight(label);
+      }
+      if (question) {
+        intro.appendChild(question.cloneNode(true));
+        introHeight += elementHeight(question);
+      }
+      units.push(unit(intro, introHeight));
     }
 
     const children = Array.from(section.children);
@@ -128,9 +147,11 @@
       if (!child.classList.contains('answer-header')) continue;
 
       const answerHeader = child;
+      const headerHeight = Math.max(32, elementHeight(answerHeader));
       const answerContent = children[i + 1]?.classList.contains('answer-content') ? children[i + 1] : null;
+
       if (!answerContent) {
-        units.push(createAnswerFragment(answerHeader, [], true));
+        units.push(unit(createAnswerFragment(answerHeader, [], true), headerHeight));
         continue;
       }
 
@@ -139,7 +160,7 @@
         const wrapper = createSectionFragment();
         wrapper.appendChild(answerHeader.cloneNode(true));
         wrapper.appendChild(answerContent.cloneNode(true));
-        units.push(wrapper);
+        units.push(unit(wrapper, headerHeight + elementHeight(answerContent)));
         i += 1;
         continue;
       }
@@ -151,7 +172,10 @@
       for (const block of blocks) {
         const height = Math.max(24, elementHeight(block));
         if (group.length && groupHeight + height > MAX_FRAGMENT_PX) {
-          units.push(createAnswerFragment(answerHeader, group, includeHeader));
+          units.push(unit(
+            createAnswerFragment(answerHeader, group, includeHeader),
+            groupHeight + (includeHeader ? headerHeight : 0)
+          ));
           includeHeader = false;
           group = [];
           groupHeight = 0;
@@ -160,44 +184,86 @@
         groupHeight += height;
       }
 
-      if (group.length) units.push(createAnswerFragment(answerHeader, group, includeHeader));
+      if (group.length) {
+        units.push(unit(
+          createAnswerFragment(answerHeader, group, includeHeader),
+          groupHeight + (includeHeader ? headerHeight : 0)
+        ));
+      }
       i += 1;
     }
 
-    return units.length ? units : [section];
+    return units.length ? units : [unit(section.cloneNode(true), elementHeight(section))];
   }
 
   function collectRenderUnits(main) {
     const units = [];
     const header = main.querySelector(':scope > .document-header');
-    if (header) units.push(header);
+    if (header) units.push(unit(header.cloneNode(true), elementHeight(header)));
 
     for (const section of main.querySelectorAll(':scope > .qa-section')) {
-      if (elementHeight(section) <= MAX_SECTION_PX) units.push(section);
+      const height = elementHeight(section);
+      if (height <= MAX_SECTION_PX) units.push(unit(section.cloneNode(true), height));
       else units.push(...splitLargeSection(section));
     }
 
     return units;
   }
 
-  function renderScale(unitCount) {
-    if (unitCount >= 45) return 1.18;
-    if (unitCount >= 25) return 1.25;
-    if (unitCount >= 12) return 1.32;
-    return 1.42;
+  function packRenderBatches(units) {
+    const batches = [];
+    let current = [];
+    let currentHeight = 0;
+
+    const flush = () => {
+      if (!current.length) return;
+      batches.push(current);
+      current = [];
+      currentHeight = 0;
+    };
+
+    for (const item of units) {
+      const nextHeight = currentHeight + item.height;
+      if (
+        current.length &&
+        (nextHeight > MAX_BATCH_PX || current.length >= MAX_BATCH_UNITS)
+      ) {
+        flush();
+      }
+      current.push(item);
+      currentHeight += item.height;
+      if (item.height >= MAX_BATCH_PX) flush();
+    }
+
+    flush();
+    return batches;
+  }
+
+  function createBatchNode(batch) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'cgx-pdf-batch';
+    for (const item of batch) wrapper.appendChild(item.node.cloneNode(true));
+    return wrapper;
+  }
+
+  function renderScale(batchCount) {
+    if (batchCount >= 35) return 1.08;
+    if (batchCount >= 20) return 1.16;
+    if (batchCount >= 10) return 1.24;
+    return 1.32;
   }
 
   function workerOptions(pageSize, scale) {
     return {
       margin: [MARGIN_MM, MARGIN_MM, MARGIN_MM, MARGIN_MM],
-      image: { type: 'jpeg', quality: 0.94 },
+      image: { type: 'jpeg', quality: 0.92 },
       html2canvas: {
         scale,
         useCORS: true,
         allowTaint: false,
         backgroundColor: '#ffffff',
         logging: false,
-        imageTimeout: 6500,
+        imageTimeout: ASSET_WAIT_MS,
         foreignObjectRendering: false,
         removeContainer: true
       },
@@ -212,17 +278,58 @@
     };
   }
 
-  async function renderUnitCanvas(element, pageSize, scale) {
-    const worker = globalThis.html2pdf()
-      .set(workerOptions(pageSize, scale))
-      .from(element)
-      .toCanvas();
+  function withWatchdog(promise, timeoutMs, message) {
+    let timer;
+    return Promise.race([
+      promise.finally(() => clearTimeout(timer)),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      })
+    ]);
+  }
 
-    const canvas = await worker.get('canvas');
-    if (!(canvas instanceof HTMLCanvasElement) || canvas.width < 2 || canvas.height < 2) {
-      throw new Error('A PDF section could not be rendered.');
+  async function renderBatchCanvas(batch, pageSize, scale) {
+    const element = createBatchNode(batch);
+    root.replaceChildren(element);
+    await waitForAssets(element);
+
+    const renderPromise = (async () => {
+      const worker = globalThis.html2pdf()
+        .set(workerOptions(pageSize, scale))
+        .from(element)
+        .toCanvas();
+
+      const canvas = await worker.get('canvas');
+      if (!(canvas instanceof HTMLCanvasElement) || canvas.width < 2 || canvas.height < 2) {
+        throw new Error('A PDF section could not be rendered.');
+      }
+      return canvas;
+    })();
+
+    try {
+      return await withWatchdog(
+        renderPromise,
+        RENDER_WATCHDOG_MS,
+        'A PDF section took too long to render.'
+      );
+    } finally {
+      root.replaceChildren();
     }
-    return canvas;
+  }
+
+  async function renderBatchWithFallback(batch, pageSize, scale) {
+    try {
+      return await renderBatchCanvas(batch, pageSize, scale);
+    } catch (error) {
+      if (batch.length <= 1) throw error;
+
+      const canvases = [];
+      for (const item of batch) {
+        const canvas = await renderBatchCanvas([item], pageSize, Math.max(0.95, scale - 0.12));
+        canvases.push(canvas);
+      }
+      return canvases;
+    }
   }
 
   function pageState(pageSize) {
@@ -251,7 +358,7 @@
     ctx.fillRect(0, 0, slice.width, slice.height);
     ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, slice.width, slice.height);
 
-    const image = slice.toDataURL('image/jpeg', 0.94);
+    const image = slice.toDataURL('image/jpeg', 0.92);
     pdf.addImage(image, 'JPEG', x, y, widthMm, heightMm, undefined, 'FAST');
 
     slice.width = 1;
@@ -266,7 +373,7 @@
     let remainingMm = bottom - state.y;
 
     if (totalHeightMm <= remainingMm) {
-      const image = canvas.toDataURL('image/jpeg', 0.94);
+      const image = canvas.toDataURL('image/jpeg', 0.92);
       pdf.addImage(image, 'JPEG', x, state.y, widthMm, totalHeightMm, undefined, 'FAST');
       state.y += totalHeightMm + gapMm;
       return;
@@ -274,7 +381,7 @@
 
     if (totalHeightMm <= state.contentHeight) {
       addPage(pdf, state);
-      const image = canvas.toDataURL('image/jpeg', 0.94);
+      const image = canvas.toDataURL('image/jpeg', 0.92);
       pdf.addImage(image, 'JPEG', x, state.y, widthMm, totalHeightMm, undefined, 'FAST');
       state.y += totalHeightMm + gapMm;
       return;
@@ -316,6 +423,12 @@
     }
   }
 
+  function releaseCanvas(canvas) {
+    if (!(canvas instanceof HTMLCanvasElement)) return;
+    canvas.width = 1;
+    canvas.height = 1;
+  }
+
   function addProfessionalFooter(pdf) {
     const pageCount = pdf.internal.getNumberOfPages();
     for (let page = 1; page <= pageCount; page += 1) {
@@ -331,7 +444,7 @@
       pdf.setFontSize(8);
       pdf.setTextColor(100, 116, 139);
       pdf.text(APP_NAME, MARGIN_MM, height - 7.5);
-      pdf.text(`Page ${page} of ${pageCount}`, width - MARGIN_MM, height - 7.5, { align: 'right' });
+      pdf.text('Page ' + page + ' of ' + pageCount, width - MARGIN_MM, height - 7.5, { align: 'right' });
     }
   }
 
@@ -342,16 +455,26 @@
 
     const normalizedPageSize = normalizePageSize(pageSize);
     const main = cleanRenderDocument(html);
-    await waitForAssets(main);
 
+    // Load assets once while the source document exists, then clone bounded units.
+    // The full conversation is removed before html2canvas starts, preventing it
+    // from cloning the entire thread for every render pass.
+    await waitForAssets(main);
     const units = collectRenderUnits(main);
     if (!units.length) throw new Error('No PDF content was found.');
 
-    const scale = renderScale(units.length);
+    const batches = packRenderBatches(units);
+    if (!batches.length) throw new Error('No PDF render batches were created.');
+
+    root.replaceChildren();
+
+    const scale = renderScale(batches.length);
     const state = pageState(normalizedPageSize);
 
-    // Seed the jsPDF instance with the small document header rather than a giant full-thread canvas.
-    const firstCanvas = await renderUnitCanvas(units[0], normalizedPageSize, scale);
+    let first = await renderBatchWithFallback(batches[0], normalizedPageSize, scale);
+    const firstCanvases = Array.isArray(first) ? first : [first];
+    const firstCanvas = firstCanvases.shift();
+
     const seedWorker = globalThis.html2pdf()
       .set(workerOptions(normalizedPageSize, scale))
       .from(firstCanvas, 'canvas')
@@ -360,17 +483,23 @@
     const pdf = await seedWorker.get('pdf');
     const firstHeightMm = firstCanvas.height * state.contentWidth / firstCanvas.width;
     state.y = MARGIN_MM + firstHeightMm + UNIT_GAP_MM;
-    firstCanvas.width = 1;
-    firstCanvas.height = 1;
+    releaseCanvas(firstCanvas);
 
-    for (let i = 1; i < units.length; i += 1) {
-      const canvas = await renderUnitCanvas(units[i], normalizedPageSize, scale);
+    for (const canvas of firstCanvases) {
       appendCanvas(pdf, canvas, state);
-      canvas.width = 1;
-      canvas.height = 1;
+      releaseCanvas(canvas);
+    }
 
-      // Yield between sections to keep Chrome responsive on long threads.
-      if (i % 3 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+    for (let i = 1; i < batches.length; i += 1) {
+      const rendered = await renderBatchWithFallback(batches[i], normalizedPageSize, scale);
+      const canvases = Array.isArray(rendered) ? rendered : [rendered];
+
+      for (const canvas of canvases) {
+        appendCanvas(pdf, canvas, state);
+        releaseCanvas(canvas);
+      }
+
+      if (i % 2 === 0) await new Promise(resolve => setTimeout(resolve, 0));
     }
 
     try {
@@ -400,7 +529,8 @@
       ok: true,
       url,
       bytes: blob.size,
-      renderUnits: units.length
+      renderUnits: units.length,
+      renderBatches: batches.length
     };
   }
 
