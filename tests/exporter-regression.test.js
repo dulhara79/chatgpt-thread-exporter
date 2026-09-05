@@ -150,7 +150,7 @@ test('PDF export uses an offscreen vector worker with direct Save As and no debu
 
   assert.match(exporterSource, /buildPdfDefinition/);
   assert.match(exporterSource, /CGX_PREPARE_PDF_WORKER/);
-  assert.match(exporterSource, /CGX_OFFSCREEN_RENDER_PDF/);
+  assert.match(exporterSource, /CGX_OFFSCREEN_START_PDF/);
   assert.match(backgroundSource, /chrome\.offscreen\.createDocument/);
   assert.match(backgroundSource, /pdf-worker\.html/);
   assert.match(backgroundSource, /chrome\.downloads\.download/);
@@ -158,6 +158,8 @@ test('PDF export uses an offscreen vector worker with direct Save As and no debu
   assert.match(backgroundSource, /chrome\.alarms/);
   assert.doesNotMatch(backgroundSource, /jobQueue|runningJob/);
   assert.match(workerSource, /currentJobId/);
+  assert.match(workerSource, /CGX_OFFSCREEN_PDF_STATUS/);
+  assert.match(exporterSource, /waitForPdfJob/);
   assert.match(workerSource, /pdfMake\.createPdf/);
   assert.match(workerSource, /URL\.createObjectURL/);
 
@@ -292,4 +294,15 @@ test('Markdown parser accepts tilde and longer code fences', () => {
   const source = fs.readFileSync(require.resolve('../exporter.js'), 'utf8');
   assert.match(source, /~\{3,/);
   assert.match(source, /marker\[0\]/);
+});
+
+
+test('PDF render protocol never holds one message response open for pdfmake', () => {
+  const exporterSource = fs.readFileSync(require.resolve('../exporter.js'), 'utf8');
+  const workerSource = fs.readFileSync(require.resolve('../pdf-worker.js'), 'utf8');
+  assert.match(exporterSource, /CGX_OFFSCREEN_START_PDF/);
+  assert.match(exporterSource, /CGX_OFFSCREEN_PDF_STATUS/);
+  assert.match(exporterSource, /shortRuntimeMessage/);
+  assert.match(workerSource, /sendResponse\(acceptJob\(request, false\)\)/);
+  assert.doesNotMatch(workerSource, /renderPdf\(request\)\s*\.then\(sendResponse\)/);
 });
