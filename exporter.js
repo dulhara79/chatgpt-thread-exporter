@@ -418,81 +418,21 @@ th { background: #EEF3F8; font-weight: 700; color: #183B56; }
     const html = buildPrintHtml(data, turns, { ...options, pageSize });
     const filename = safeFilename(data?.title || 'ChatGPT Conversation');
 
-    if (!globalThis.chrome?.runtime?.getURL) {
+    if (!globalThis.chrome?.runtime?.sendMessage) {
       throw new Error('PDF export is only available inside the Chrome extension.');
     }
 
-    const rendererUrl = chrome.runtime.getURL('pdf-renderer.html');
-    const rendererOrigin = new URL(rendererUrl).origin;
-    const iframe = document.createElement('iframe');
-    iframe.src = rendererUrl;
-    iframe.setAttribute('aria-hidden', 'true');
-    iframe.tabIndex = -1;
-    iframe.style.cssText = [
-      'position:fixed',
-      'left:-10000px',
-      'top:0',
-      'width:210mm',
-      'height:297mm',
-      'border:0',
-      'opacity:0',
-      'pointer-events:none',
-      'z-index:-1'
-    ].join(';');
+    const response = await chrome.runtime.sendMessage({
+      type: 'CGX_EXPORT_PDF',
+      html,
+      filename,
+      pageSize
+    });
 
-    const host = document.body || document.documentElement;
-    host.appendChild(iframe);
-
-    const requestId = 'cgx-pdf-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
-
-    try {
-      await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('The local PDF engine did not start.')), 15000);
-        iframe.addEventListener('load', () => {
-          clearTimeout(timer);
-          resolve();
-        }, { once: true });
-        iframe.addEventListener('error', () => {
-          clearTimeout(timer);
-          reject(new Error('The local PDF engine could not be loaded.'));
-        }, { once: true });
-      });
-
-      return await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          cleanup();
-          reject(new Error('PDF generation took too long. Please try again.'));
-        }, 120000);
-
-        const cleanup = () => {
-          clearTimeout(timeout);
-          window.removeEventListener('message', onMessage);
-        };
-
-        const onMessage = event => {
-          if (event.source !== iframe.contentWindow || event.origin !== rendererOrigin) return;
-          const response = event.data;
-          if (response?.type !== 'CGX_RENDER_PDF_RESULT' || response.requestId !== requestId) return;
-          cleanup();
-          if (!response.ok) {
-            reject(new Error(response.error || 'PDF generation failed.'));
-            return;
-          }
-          resolve(response);
-        };
-
-        window.addEventListener('message', onMessage);
-        iframe.contentWindow.postMessage({
-          type: 'CGX_RENDER_PDF',
-          requestId,
-          html,
-          filename,
-          pageSize
-        }, rendererOrigin);
-      });
-    } finally {
-      iframe.remove();
+    if (!response?.ok) {
+      throw new Error(response?.error || 'PDF generation failed.');
     }
+    return response;
   }
 
   // ---------------- DOCX / OOXML ----------------
