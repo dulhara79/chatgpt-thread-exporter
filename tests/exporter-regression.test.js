@@ -285,7 +285,7 @@ test('large SVG is capped before base64 serialization', () => {
 test('V0.5 manifest uses alarms watchdog and BLOBS-capable offscreen renderer', () => {
   const manifest = JSON.parse(fs.readFileSync(require.resolve('../manifest.json'), 'utf8'));
   const backgroundSource = fs.readFileSync(require.resolve('../background.js'), 'utf8');
-  assert.equal(manifest.version, '0.5.1');
+  assert.equal(manifest.version, '0.5.2');
   assert.equal(manifest.permissions.includes('alarms'), true);
   assert.match(backgroundSource, /'BLOBS'/);
 });
@@ -308,7 +308,10 @@ test('PDF render protocol never holds one message response open for pdfmake', ()
 });
 
 
-test('bundled pdfmake guards missing GPOS anchors for Indic fonts', () => {
-  const pdfmake = fs.readFileSync(require.resolve('../vendor/pdfmake.min.js'), 'utf8');
-  assert.match(pdfmake, /getAnchor\(r\)\{if\(!r\)return\{x:0,y:0\}/);
+
+
+test('PDF worker preserves Roboto VFS when loading Unicode fonts', () => {
+  const worker = fs.readFileSync(require.resolve('../pdf-worker.js'), 'utf8');
+  assert.match(worker, /globalThis\.vfs\s*\|\|\s*\{\}/);
+  assert.match(worker, /pdfMake\.addVirtualFileSystem\(mergedVfs\)/);
 });

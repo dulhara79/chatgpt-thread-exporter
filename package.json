@@ -1,6 +1,6 @@
 {
   "name": "chatgpt-thread-exporter",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "private": true,
   "scripts": {
     "test": "node --test tests/exporter-regression.test.js tests/pdf-fidelity-regression.test.js tests/pdf-font-smoke.test.js tests/pdf-lifecycle-regression.test.js",

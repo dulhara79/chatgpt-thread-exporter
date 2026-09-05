@@ -95,16 +95,25 @@
     }
 
     const load = async () => {
-      const vfs = {};
+      const customVfs = {};
       await Promise.all(required.map(async key => {
         const [name, path] = FONT_FILES[key];
         const response = await fetch(chrome.runtime.getURL(path));
         if (!response.ok) throw new Error('Could not load bundled PDF font: ' + name);
         const bytes = new Uint8Array(await response.arrayBuffer());
         if (!bytes.length) throw new Error('Bundled PDF font is empty: ' + name);
-        vfs[name] = bytesToBase64(bytes);
+        customVfs[name] = bytesToBase64(bytes);
       }));
-      globalThis.pdfMake.addVirtualFileSystem(vfs);
+
+      // vfs_fonts.js exposes its Roboto VFS as globalThis.vfs. pdfmake's
+      // addVirtualFileSystem replaces the active VFS in this bundled build,
+      // so always re-register Roboto together with any lazily loaded fonts.
+      const mergedVfs = {
+        ...(globalThis.vfs || {}),
+        ...customVfs
+      };
+      globalThis.vfs = mergedVfs;
+      globalThis.pdfMake.addVirtualFileSystem(mergedVfs);
       required.forEach(key => loadedFontKeys.add(key));
       configureFonts();
     };
