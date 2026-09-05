@@ -1,13 +1,14 @@
 (() => {
   'use strict';
 
-  const OFFSCREEN_URL = 'pdf-renderer.html';
+  const DEBUGGER_VERSION = '1.3';
   const EXPORT_MESSAGE = 'CGX_EXPORT_PDF';
-  const RENDER_MESSAGE = 'CGX_OFFSCREEN_RENDER_PDF';
-  const CLEANUP_MESSAGE = 'CGX_OFFSCREEN_RELEASE_PDF';
+  const RENDER_PAGE = 'native-pdf-renderer.html';
+  const TAB_READY_TIMEOUT_MS = 8000;
+  const ASSET_WAIT_TIMEOUT_MS = 3500;
+  const PRINT_TIMEOUT_MS = 45000;
 
-  let creatingOffscreen = null;
-  const pendingPdfUrls = new Map();
+  let renderQueue = Promise.resolve();
 
   function sanitizeFilename(name) {
     const cleaned = String(name || 'ChatGPT Conversation')
@@ -19,110 +20,195 @@
     return base + '.pdf';
   }
 
-  async function hasOffscreenDocument() {
-    const url = chrome.runtime.getURL(OFFSCREEN_URL);
-
-    if (chrome.runtime.getContexts) {
-      const contexts = await chrome.runtime.getContexts({
-        contextTypes: ['OFFSCREEN_DOCUMENT'],
-        documentUrls: [url]
-      });
-      return contexts.length > 0;
-    }
-
-    const matchedClients = await self.clients.matchAll();
-    return matchedClients.some(client => client.url === url);
+  function withTimeout(promise, timeoutMs, message) {
+    let timer;
+    return Promise.race([
+      Promise.resolve(promise).finally(() => clearTimeout(timer)),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      })
+    ]);
   }
 
-  async function ensureOffscreenDocument() {
-    if (await hasOffscreenDocument()) return;
-    if (creatingOffscreen) return creatingOffscreen;
+  async function waitForTabReady(tabId) {
+    const initial = await chrome.tabs.get(tabId);
+    if (initial?.status === 'complete') return;
 
-    creatingOffscreen = chrome.offscreen.createDocument({
-      url: OFFSCREEN_URL,
-      reasons: ['DOM_PARSER'],
-      justification: 'Render ChatGPT conversation HTML into a local PDF without opening a tab or print preview.'
+    await withTimeout(new Promise((resolve, reject) => {
+      const onUpdated = (updatedTabId, info) => {
+        if (updatedTabId !== tabId || info.status !== 'complete') return;
+        cleanup();
+        resolve();
+      };
+      const onRemoved = removedTabId => {
+        if (removedTabId !== tabId) return;
+        cleanup();
+        reject(new Error('The native PDF render tab closed unexpectedly.'));
+      };
+      const cleanup = () => {
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        chrome.tabs.onRemoved.removeListener(onRemoved);
+      };
+      chrome.tabs.onUpdated.addListener(onUpdated);
+      chrome.tabs.onRemoved.addListener(onRemoved);
+    }), TAB_READY_TIMEOUT_MS, 'The native PDF render tab did not become ready.');
+  }
+
+  async function waitForDocumentAssets(debuggee) {
+    const expression = `(async () => {
+      const deadline = 3500;
+      const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+      try {
+        if (document.fonts && document.fonts.ready) {
+          await Promise.race([document.fonts.ready, sleep(deadline)]);
+        }
+      } catch {}
+
+      try {
+        const pending = Array.from(document.images || []).filter(img => !img.complete);
+        if (pending.length) {
+          await Promise.race([
+            Promise.all(pending.map(img => new Promise(resolve => {
+              let done = false;
+              const finish = () => {
+                if (done) return;
+                done = true;
+                resolve();
+              };
+              img.addEventListener('load', finish, { once: true });
+              img.addEventListener('error', finish, { once: true });
+            }))),
+            sleep(deadline)
+          ]);
+        }
+      } catch {}
+
+      const style = document.createElement('style');
+      style.setAttribute('data-cgx-native-print', 'true');
+      style.textContent = '*{animation:none!important;transition:none!important;}html{scroll-behavior:auto!important;}';
+      document.head.appendChild(style);
+
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return {
+        images: (document.images || []).length,
+        incompleteImages: Array.from(document.images || []).filter(img => !img.complete).length,
+        height: Math.ceil(document.documentElement.scrollHeight || document.body?.scrollHeight || 0)
+      };
+    })()`;
+
+    const result = await withTimeout(
+      chrome.debugger.sendCommand(debuggee, 'Runtime.evaluate', {
+        expression,
+        awaitPromise: true,
+        returnByValue: true
+      }),
+      ASSET_WAIT_TIMEOUT_MS + 2500,
+      'The PDF document assets took too long to prepare.'
+    );
+
+    return result?.result?.value || {};
+  }
+
+  async function setDocumentHtml(debuggee, html) {
+    await chrome.debugger.sendCommand(debuggee, 'Page.enable');
+    await chrome.debugger.sendCommand(debuggee, 'Runtime.enable');
+
+    const tree = await chrome.debugger.sendCommand(debuggee, 'Page.getFrameTree');
+    const frameId = tree?.frameTree?.frame?.id;
+    if (!frameId) throw new Error('Chrome could not identify the native PDF render frame.');
+
+    await chrome.debugger.sendCommand(debuggee, 'Page.setDocumentContent', {
+      frameId,
+      html: String(html || '')
     });
-
-    try {
-      await creatingOffscreen;
-    } finally {
-      creatingOffscreen = null;
-    }
   }
 
-  async function releasePdfUrl(url) {
-    if (!url) return;
+  async function renderNativePdf(html, filename) {
+    let tab = null;
+    let attached = false;
+    const startedAt = Date.now();
+
     try {
-      await chrome.runtime.sendMessage({
-        target: 'cgx-offscreen',
-        type: CLEANUP_MESSAGE,
-        url
+      tab = await chrome.tabs.create({
+        url: chrome.runtime.getURL(RENDER_PAGE),
+        active: false
       });
-    } catch {}
-  }
+      if (!tab?.id) throw new Error('Could not create the native PDF render tab.');
 
-  async function renderAndSavePdf(request) {
-    await ensureOffscreenDocument();
+      await waitForTabReady(tab.id);
 
-    const rendered = await chrome.runtime.sendMessage({
-      target: 'cgx-offscreen',
-      type: RENDER_MESSAGE,
-      html: String(request.html || ''),
-      filename: String(request.filename || 'ChatGPT Conversation'),
-      pageSize: String(request.pageSize || 'A4')
-    });
+      const debuggee = { tabId: tab.id };
+      await chrome.debugger.attach(debuggee, DEBUGGER_VERSION);
+      attached = true;
 
-    if (!rendered?.ok || !rendered.url) {
-      throw new Error(rendered?.error || 'The local PDF renderer failed.');
-    }
+      await setDocumentHtml(debuggee, html);
+      const documentStats = await waitForDocumentAssets(debuggee);
 
-    const filename = sanitizeFilename(request.filename);
-    try {
+      const pdf = await withTimeout(
+        chrome.debugger.sendCommand(debuggee, 'Page.printToPDF', {
+          printBackground: true,
+          preferCSSPageSize: true,
+          displayHeaderFooter: false,
+          generateTaggedPDF: true,
+          generateDocumentOutline: true,
+          transferMode: 'ReturnAsBase64'
+        }),
+        PRINT_TIMEOUT_MS,
+        'Chrome native PDF generation took too long.'
+      );
+
+      if (!pdf?.data) throw new Error('Chrome did not return PDF data.');
+
+      const outputFilename = sanitizeFilename(filename);
       const downloadId = await chrome.downloads.download({
-        url: rendered.url,
-        filename,
+        url: 'data:application/pdf;base64,' + pdf.data,
+        filename: outputFilename,
         conflictAction: 'uniquify',
         saveAs: true
       });
 
       if (!Number.isInteger(downloadId)) {
-        throw new Error('Chrome could not open the Save As dialog.');
+        throw new Error('Chrome could not open the PDF Save As dialog.');
       }
-
-      pendingPdfUrls.set(downloadId, rendered.url);
-      setTimeout(async () => {
-        if (pendingPdfUrls.get(downloadId) !== rendered.url) return;
-        pendingPdfUrls.delete(downloadId);
-        await releasePdfUrl(rendered.url);
-      }, 5 * 60 * 1000);
 
       return {
         ok: true,
         downloadId,
-        filename,
-        bytes: rendered.bytes || 0
+        filename: outputFilename,
+        bytes: Math.floor(pdf.data.length * 0.75),
+        renderMs: Date.now() - startedAt,
+        documentHeight: Number(documentStats.height || 0),
+        imageCount: Number(documentStats.images || 0),
+        incompleteImages: Number(documentStats.incompleteImages || 0),
+        engine: 'chrome-native-print'
       };
-    } catch (error) {
-      await releasePdfUrl(rendered.url);
-      throw error;
+    } finally {
+      if (tab?.id) {
+        if (attached) {
+          try { await chrome.debugger.detach({ tabId: tab.id }); } catch {}
+        }
+        try { await chrome.tabs.remove(tab.id); } catch {}
+      }
     }
   }
 
-  chrome.downloads.onChanged.addListener(delta => {
-    if (!delta?.id || !delta.state?.current) return;
-    if (delta.state.current !== 'complete' && delta.state.current !== 'interrupted') return;
+  function enqueueRender(request) {
+    const run = renderQueue
+      .catch(() => {})
+      .then(() => renderNativePdf(
+        String(request.html || ''),
+        String(request.filename || 'ChatGPT Conversation')
+      ));
 
-    const url = pendingPdfUrls.get(delta.id);
-    if (!url) return;
-    pendingPdfUrls.delete(delta.id);
-    releasePdfUrl(url);
-  });
+    renderQueue = run.catch(() => {});
+    return run;
+  }
 
   chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
-    if (request?.type !== EXPORT_MESSAGE || request?.target === 'cgx-offscreen') return;
+    if (request?.type !== EXPORT_MESSAGE) return;
 
-    renderAndSavePdf(request)
+    enqueueRender(request)
       .then(sendResponse)
       .catch(error => sendResponse({
         ok: false,

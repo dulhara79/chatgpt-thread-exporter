@@ -1,11 +1,11 @@
-# ChatGPT Thread Exporter — V0.3.6
+# ChatGPT Thread Exporter — V0.3.7
 
 A local-only Chrome Manifest V3 extension for exporting ChatGPT conversations to professional PDF, Microsoft Word (`.docx`), and Markdown.
 
-## V0.3.6 highlights
+## V0.3.7 highlights
 
 - **Long-thread PDF generation is now chunked by Q&A/answer blocks** instead of rasterizing the entire conversation into one giant canvas. This keeps memory bounded and substantially reduces export time for large conversations.
-- PDF export continues to use an MV3 offscreen document with native Save As, no debugger banner, no visible tab, and no print preview.
+- **PDF export now uses Chrome's native print engine** instead of html2canvas rasterization, which is the critical performance fix for long conversations.
 - PDF, Word, and Markdown actions now use consistent professional SVG document icons instead of text-letter badges.
 - Export one Q&A or the complete rendered conversation.
 - Every assistant answer gets a self-healing download/export control. If ChatGPT React re-renders an action row and removes the control, the extension inserts it again.
@@ -47,7 +47,7 @@ Use the **Export** control beside the conversation header Share action. The exte
 
 ### PDF
 
-PDFs are generated locally inside an MV3 **offscreen document**. V0.3.5 no longer sends the whole conversation through one full-height html2canvas render. Instead it renders bounded Q&A/answer fragments, appends them into one paginated jsPDF document, releases each canvas immediately, and adapts render scale for very long threads. This avoids the large-canvas memory/time spike while keeping the professional layout, equations, tables, code blocks, Unicode, and images. Chrome's Downloads API still opens native **Save As** with `saveAs: true`; the suggested filename is the conversation title and A4 remains the default page size.
+PDFs are generated locally with Chrome's native print engine through `Page.printToPDF`, using a temporary inactive extension-owned render tab. V0.3.7 removes the html2canvas/html2pdf rasterization path completely, so long conversations are laid out once by Chromium instead of being captured as many JPEG canvases. The generated PDF keeps searchable/selectable text, native browser pagination, equations, tables, code, Unicode, and images. Chrome's Downloads API opens native **Save As** with `saveAs: true`; the suggested filename is the conversation title and A4 remains the default page size.
 
 ### Word (.docx)
 
@@ -65,7 +65,7 @@ Produces clean semantic Markdown without the old metadata table. Lists, headings
 - No ChatGPT credentials.
 - No undocumented ChatGPT API.
 - Conversation processing and document generation stay in the browser.
-- Permissions are limited to `activeTab`, `downloads`, and `offscreen`, plus ChatGPT host access. There is **no `debugger` permission**. `offscreen` provides a hidden extension DOM for local PDF rendering; `downloads` opens Chrome's native Save As flow.
+- PDF generation now requires `debugger` and `tabs` in addition to `activeTab` and `downloads`, because Chrome exposes `Page.printToPDF` through the DevTools Protocol. The render tab is created inactive and removed immediately after PDF generation. Chrome may show its debugging notification while this native render is active.
 
 The extension intentionally does not request broad host permissions solely to improve rare cross-origin image cases.
 
@@ -87,7 +87,7 @@ npm test
 npm run check
 ```
 
-The regression suite covers metadata removal, ordered list sequence, A4/Letter/Legal, favicon filtering, multilingual Unicode/emoji, TeX preservation, DOCX numbering/page geometry, and a hard guard against reintroducing debugger/print-preview PDF export.
+The regression suite covers metadata removal, ordered list sequence, A4/Letter/Legal, favicon filtering, multilingual Unicode/emoji, TeX preservation, DOCX numbering/page geometry, and guards that enforce the native Chrome PDF path and prevent reintroducing html2canvas raster export.
 
 GitHub Actions runs the same checks on pull requests to `main`.
 
@@ -106,7 +106,7 @@ The approved V0.3 design is documented at:
 
 ## Third-party component
 
-PDF generation bundles `html2pdf.js` v0.14.0 and its upstream license notices under `vendor/`. The library executes locally inside the extension; no document content is sent to a PDF service.
+V0.3.7 no longer bundles or executes html2pdf.js/html2canvas for PDF export.
 
 ## Version
 
