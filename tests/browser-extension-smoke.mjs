@@ -2,6 +2,7 @@ import puppeteer from 'puppeteer-core';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 const extensionPath = path.resolve('.');
 const executablePath = process.env.CHROME_PATH;
@@ -23,15 +24,25 @@ const browser = await puppeteer.launch({
 });
 
 try {
-  const target = await browser.waitForTarget(
-    item => item.type() === 'service_worker' && item.url().startsWith('chrome-extension://'),
-    { timeout: 20000 }
-  );
-  const extensionId = new URL(target.url()).host;
-  if (!extensionId) throw new Error('Could not determine unpacked extension id.');
+  // Chromium derives an unpacked extension id from the normalized absolute
+  // extension path: SHA-256, first 32 hex nibbles, map 0..f to a..p.
+  const digest = crypto.createHash('sha256').update(extensionPath).digest('hex').slice(0, 32);
+  const extensionId = Array.from(digest, ch => String.fromCharCode(97 + parseInt(ch, 16))).join('');
 
   const page = await browser.newPage();
-  await page.goto('chrome-extension://' + extensionId + '/popup.html', { waitUntil: 'domcontentloaded' });
+  const popupUrl = 'chrome-extension://' + extensionId + '/popup.html';
+  let lastError = null;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      await page.goto(popupUrl, { waitUntil: 'domcontentloaded', timeout:5000 });
+      lastError = null;
+      break;
+    } catch (error) {
+      lastError = error;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  }
+  if (lastError) throw lastError;
 
   const result = await page.evaluate(async () => {
     const jobId = 'browser-smoke-' + Date.now();
