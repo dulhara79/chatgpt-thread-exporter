@@ -36,15 +36,6 @@
     () => document.body
   ];
 
-  const TURN_CANDIDATES = [
-    'div[data-test-render-count]',
-    '[class*="conversation-turn"]',
-    // Structural fallback: the common ancestor that holds a user message.
-    root => Array.from(root.querySelectorAll(USER_SELECTOR))
-      .map(node => node.closest('div[data-test-render-count]') || node.parentElement?.parentElement || node)
-      .filter(Boolean)
-  ];
-
   const BODY_CANDIDATES = [
     '.font-claude-response',
     '.font-claude-message',
