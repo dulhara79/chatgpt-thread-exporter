@@ -482,8 +482,15 @@
       // fall back to a content hash, which survives Claude unmounting and
       // remounting the same turn during a scroll harvest.
       const user = adapter.userNode(owner);
-      const seed = (user?.innerText || node.innerText || '').slice(0, 400);
-      return 'hash:' + contentHash(seed);
+      const bodyText = String(user?.innerText || node.innerText || '');
+      const prevText = String(owner.previousElementSibling?.innerText || '').slice(-240);
+      const nextText = String(owner.nextElementSibling?.innerText || '').slice(0, 240);
+      const seed = [bodyText, prevText, nextText].join('\u241E');
+      // Two independent 32-bit hashes plus the full length make accidental
+      // collisions negligible, while neighbouring context distinguishes common
+      // repeated prompts such as "Continue" in long conversations.
+      return 'hash:' + contentHash(seed) + '-' +
+        contentHash(Array.from(seed).reverse().join('')) + '-' + seed.length;
     },
 
     conversationTitle() {
