@@ -30,10 +30,14 @@
       (codePoint >= 0xD7B0 && codePoint <= 0xD7FF)
     ) return 'korean';
     if ((codePoint >= 0x1F000 && codePoint <= 0x1FAFF) || (codePoint >= 0x1FC00 && codePoint <= 0x1FFFF)) return 'emoji';
+    // Keep normal-text routing consistent with the measured font coverage
+    // used by pdf-worker.js. Arrows/box drawing are present in the bundled mono
+    // font but not reliably in NotoSansSymbols2; sending them to Symbols2 is
+    // what previously produced blank rectangles.
+    if (codePoint >= 0x2190 && codePoint <= 0x25FF) return 'mono';
     if (
-      (codePoint >= 0x2190 && codePoint <= 0x2BFF) ||
-      (codePoint >= 0x2300 && codePoint <= 0x23FF) ||
-      (codePoint >= 0x2500 && codePoint <= 0x27FF)
+      (codePoint >= 0x2600 && codePoint <= 0x27BF) ||
+      (codePoint >= 0x2B00 && codePoint <= 0x2BFF)
     ) return 'symbols';
     if ((codePoint >= 0x0300 && codePoint <= 0x036F) || codePoint === 0x200D || codePoint === 0xFE0E || codePoint === 0xFE0F) {
       return previous;
