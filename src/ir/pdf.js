@@ -44,7 +44,13 @@
   function pdfSafeText(text) {
     return String(text || '')
       .replace(/\u0000/g, '')
-      .replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '');
+      .replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '')
+      // pdfmake can render a missing-glyph rectangle for variation selectors
+      // and ZWJ even though they are shaping controls, not visible glyphs.
+      // The bundled monochrome emoji font renders the base emoji safely; a
+      // complex ZWJ sequence therefore degrades to adjacent emoji rather than
+      // showing a blank square in the exported PDF.
+      .replace(/[\u200D\uFE0E\uFE0F]/g, '');
   }
 
   function splitFontRuns(text, base = {}) {
@@ -159,22 +165,13 @@
       };
     }
 
-    const columns = Math.max(20, Math.floor(width / (MIN_CODE_FONT * 0.61)));
-    const wrapped = [];
-    for (const line of text.split('\n')) {
-      const chars = Array.from(line);
-      if (chars.length <= columns) { wrapped.push(line); continue; }
-      let offset = 0;
-      while (offset < chars.length) {
-        const slice = chars.slice(offset, offset + columns).join('');
-        offset += columns;
-        wrapped.push(offset < chars.length ? slice + ' \u21B4' : '  \u21B3' + slice);
-      }
-    }
-
+    // Preserve source text byte-for-byte at the IR boundary. The previous
+    // implementation inserted ↴/↳ continuation characters into long lines,
+    // so copying code from the PDF produced source that never existed in the
+    // conversation. pdf-worker.js already allows non-diagram lines to wrap.
     return {
       cgxPreformatted: {
-        text: wrapped.join('\n'),
+        text,
         diagram: false,
         language: block.lang || '',
         fontSize: MIN_CODE_FONT,
@@ -377,8 +374,9 @@
 
       const questionNodes = blocksToNodes(turn.question.blocks || [], pageSize);
       content.push({
-        // Keeps the label glued to its box and the box off a page seam.
-        unbreakable: true,
+        // The label remains a single unbreakable node, but the question body
+        // is allowed to paginate. Making the entire box unbreakable can make a
+        // long pasted prompt taller than a page and break layout.
         stack: [
           {
             text: splitFontRuns(label),
