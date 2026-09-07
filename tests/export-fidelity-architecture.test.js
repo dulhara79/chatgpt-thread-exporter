@@ -149,3 +149,26 @@ test('ChatGPT captures an assistant-generated Markdown file from an accessible d
   assert.ok(text.includes('# Full Report'));
   assert.ok(text.includes('console.log("ok")'));
 });
+
+
+test('unreadable generated Markdown attachment records an explicit capture failure', async () => {
+  const page = loadPage(
+    `<html><body><main>
+      <article data-testid="conversation-turn-1">
+        <div data-message-author-role="assistant"><div class="markdown">
+          <div class="file-card">
+            <a download="missing.md" href="sandbox:/mnt/data/missing.md">missing.md</a>
+          </div>
+        </div></div>
+      </article>
+    </main></body></html>`,
+    'https://chatgpt.com/c/missing-md'
+  );
+
+  const assistant = page.adapter.messages().find(message => message.role === 'assistant').node;
+  const captured = await page.adapter.captureAttachments(assistant);
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].__cgxAttachmentContent, undefined);
+  assert.ok(captured[0].__cgxAttachmentFailure,
+    'unreadable text attachment must retain a machine-readable failure reason');
+});
