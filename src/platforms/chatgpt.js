@@ -254,7 +254,12 @@
       if (messageId) return 'message:' + messageId;
       const testId = owner.getAttribute?.('data-testid');
       if (testId) return 'testid:' + testId;
-      return 'hash:' + contentHash((node.innerText || '').slice(0, 400));
+      const ownerText = String(node.innerText || '');
+      const prevText = String(owner.previousElementSibling?.innerText || '').slice(-240);
+      const nextText = String(owner.nextElementSibling?.innerText || '').slice(0, 240);
+      const seed = [ownerText, prevText, nextText].join('\u241E');
+      return 'hash:' + contentHash(seed) + '-' +
+        contentHash(Array.from(seed).reverse().join('')) + '-' + seed.length;
     },
 
     conversationTitle() {
