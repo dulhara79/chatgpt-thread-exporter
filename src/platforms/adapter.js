@@ -237,7 +237,7 @@
    * keeps their detached subtree alive for later extraction.
    *
    * @param {PlatformAdapter} adapter
-   * @param {{maxSteps?: number, settleMs?: number, lazyWaitMs?: number, onProgress?: Function, signal?: AbortSignal}} [options]
+   * @param {{maxSteps?: number, settleMs?: number, lazyWaitMs?: number, onProgress?: Function, signal?: AbortSignal, captureMessage?: Function}} [options]
    */
   async function harvestVirtualizedTurns(adapter, options = {}) {
     const maxSteps = Number(options.maxSteps || 600);
@@ -253,11 +253,30 @@
     /** @type {string[]} */
     const order = [];
 
-    const collect = () => {
+    const collect = async () => {
       const windowKeys = [];
       for (const message of adapter.messages()) {
         const key = adapter.stableKey(message.node);
-        // A remount replaces the stale node under the same key.
+        const previous = seen.get(key);
+
+        // Anything that depends on a live page interaction (Claude artifacts,
+        // collapsed pasted files, generated file cards) MUST be captured while
+        // this message is still mounted. Retaining a detached DOM subtree is
+        // sufficient for static text, but a detached button can no longer open
+        // a side panel in the host application.
+        if (typeof options.captureMessage === 'function' &&
+            (!previous || previous.node !== message.node)) {
+          try {
+            await options.captureMessage(message, key);
+          } catch (error) {
+            note('Mounted message capture failed for ' + key + ': ' +
+              String(error?.message || error));
+          }
+        }
+
+        // A remount replaces the stale node under the same key. Any snapshots
+        // captured above travel with that node even if the virtualizer detaches
+        // it later.
         seen.set(key, message);
         windowKeys.push(key);
       }
@@ -271,7 +290,7 @@
       } catch {}
     };
 
-    collect();
+    await collect();
     report('harvest', 0);
 
     let stagnantRounds = 0;
@@ -300,7 +319,7 @@
 
       scroller.scrollTop = Math.max(0, beforeTop - Math.round(scroller.clientHeight * 0.75));
       await sleep(settleMs);
-      collect();
+      await collect();
       steps += 1;
       report('harvest', steps);
 
@@ -321,7 +340,7 @@
     // Put the reader back where they were.
     scroller.scrollTop = startTop;
     await sleep(40);
-    collect();
+    await collect();
 
     const messages = order.map(key => seen.get(key)).filter(item => item?.node instanceof Element);
     if (!complete) note('Harvest stopped before reaching the top of the conversation.');
@@ -341,7 +360,7 @@
     while (Date.now() - startedAt < timeoutMs) {
       if (options.signal?.aborted) return false;
       await sleep(160);
-      collect();
+      await collect();
       if (seen.size > startCount) return true;
       if (scroller.scrollHeight > startHeight + 40) {
         // Content was prepended; step down so the next loop can scroll up again.
