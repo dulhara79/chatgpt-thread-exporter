@@ -168,7 +168,30 @@
     return turns;
   }
 
-  const ARCHIVE_EXT = /\.(tar|tar\.gz|tgz|zip|gz|bz2|xz|7z|rar|exe|dll|bin|so|dylib|pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|webp|mp4|mp3|wav)$/i;
+  const BUNDLE_EXT = /\.(tar|tar\.gz|tgz|zip|gz|bz2|xz|7z|rar)$/i;
+  const BINARY_EXT = /\.(exe|dll|bin|so|dylib|pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|webp|mp4|mp3|wav)$/i;
+  const MARKDOWN_EXT = /\.(md|markdown|mdown|mkd)$/i;
+
+  function attachmentLanguage(filename) {
+    const ext = (String(filename || '').match(/\.([A-Za-z0-9]+)$/) || [, ''])[1].toLowerCase();
+    const aliases = {
+      js: 'javascript',
+      jsx: 'jsx',
+      ts: 'typescript',
+      tsx: 'tsx',
+      py: 'python',
+      rb: 'ruby',
+      rs: 'rust',
+      sh: 'bash',
+      zsh: 'bash',
+      yml: 'yaml',
+      htm: 'html',
+      cxx: 'cpp',
+      cc: 'cpp',
+      cs: 'csharp'
+    };
+    return aliases[ext] || ext;
+  }
 
   /**
    * Blocks for files attached to a message.
@@ -210,14 +233,39 @@
       const filenameMatch = name.match(/[\w.-]+\.[A-Za-z0-9]{1,8}/);
       const filename = filenameMatch?.[0] || (pasted ? 'Pasted content' : name);
 
-      if (ARCHIVE_EXT.test(filename)) {
-        // The archive's bytes are not in the page; the extension cannot open
-        // it, so say so rather than emitting an empty or broken block.
+      if (BUNDLE_EXT.test(filename)) {
+        blocks.push({
+          type: 'heading',
+          level: 4,
+          inline: [{ type: 'text', text: 'Attachment bundle: ' + filename }]
+        });
         blocks.push({
           type: 'paragraph',
           inline: [{
             type: 'em',
-            children: [{ type: 'text', text: `Attachment: ${filename} (binary file, contents not available in the page)` }]
+            children: [{
+              type: 'text',
+              text: 'Archive/bundle referenced in the original conversation. Its internal files are not available in the rendered chat page, so the exporter records the bundle here without inventing or omitting its presence.'
+            }]
+          }]
+        });
+        continue;
+      }
+
+      if (BINARY_EXT.test(filename)) {
+        blocks.push({
+          type: 'heading',
+          level: 4,
+          inline: [{ type: 'text', text: 'Attachment: ' + filename }]
+        });
+        blocks.push({
+          type: 'paragraph',
+          inline: [{
+            type: 'em',
+            children: [{
+              type: 'text',
+              text: 'Binary attachment referenced in the original conversation; its file contents are not embedded in the chat DOM.'
+            }]
           }]
         });
         continue;
@@ -229,17 +277,29 @@
       const body = pre ||
         (root.matches?.('textarea, [class*="font-mono" i], [class*="content" i], [class*="whitespace-pre" i]') ? root : null) ||
         root.querySelector?.('textarea, [class*="font-mono" i], [class*="content" i], [class*="whitespace-pre" i]');
-      const text = body
+      const rawText = body
         ? String(body.value || extractor.preservedText(body) || '')
         : '';
+      const text = typeof extractor.safeText === 'function'
+        ? extractor.safeText(rawText)
+        : rawText.replace(/\u0000/g, '');
 
       if (text.trim()) {
-        const lang = pasted
-          ? ''
-          : (filename.match(/\.([A-Za-z0-9]+)$/) || [, ''])[1].toLowerCase();
         const heading = pasted ? 'Pasted content' : 'Attachment: ' + filename;
         blocks.push({ type: 'heading', level: 4, inline: [{ type: 'text', text: heading }] });
-        blocks.push({ type: 'code', lang, text: text.replace(/\s+$/, ''), diagram: false });
+
+        if (!pasted && MARKDOWN_EXT.test(filename) && typeof IR.parseBlocks === 'function') {
+          const rendered = IR.parseBlocks(text);
+          if (rendered.length) blocks.push(...rendered);
+          else blocks.push({ type: 'code', lang: 'markdown', text: text.replace(/\s+$/, ''), diagram: false });
+        } else {
+          blocks.push({
+            type: 'code',
+            lang: pasted ? '' : attachmentLanguage(filename),
+            text: text.replace(/\s+$/, ''),
+            diagram: false
+          });
+        }
       } else {
         const label = pasted ? 'Pasted content' : 'Attachment: ' + filename;
         blocks.push({
