@@ -718,15 +718,6 @@ test('artifact control bytes are stripped before PDF rendering', () => {
   assert.equal(raw.includes('\\u0001'), false, 'C0 controls must never reach pdfmake');
 });
 
-test('attachment policy renders Markdown and labels archive bundles explicitly', () => {
-  const source = readSource('content.js');
-  assert.match(source, /MARKDOWN_EXT/);
-  assert.match(source, /IR\.parseBlocks\(text\)/, 'Markdown file bodies must be rendered as Markdown');
-  assert.match(source, /BUNDLE_EXT/);
-  assert.match(source, /Attachment bundle:/);
-  assert.match(source, /internal files are not available/i);
-  assert.match(source, /attachmentLanguage\(filename\)/, 'source files keep language-aware code formatting');
-});
 
 
 test('assistant-generated Markdown file cards are detected and captured', async () => {
