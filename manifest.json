@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Thread Exporter",
   "short_name": "AI Export",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Export any ChatGPT or Claude conversation \u2014 or a single Q&A \u2014 to professional PDF, Word (.docx), or Markdown documents.",
   "minimum_chrome_version": "116",
   "permissions": [
