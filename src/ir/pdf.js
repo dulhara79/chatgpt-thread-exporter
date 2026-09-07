@@ -41,10 +41,16 @@
     return 'latin';
   }
 
+  function pdfSafeText(text) {
+    return String(text || '')
+      .replace(/\u0000/g, '')
+      .replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '');
+  }
+
   function splitFontRuns(text, base = {}) {
     const runs = [];
     let current = null;
-    for (const char of Array.from(String(text || ''))) {
+    for (const char of Array.from(pdfSafeText(text))) {
       const font = fontForCodePoint(char.codePointAt(0), current?.cgxFont || 'latin');
       if (current && current.cgxFont === font) current.text += char;
       else {
@@ -125,7 +131,7 @@
    * being silently clipped off the right edge.
    */
   function codeNode(block, pageSize) {
-    const text = String(block.text || '');
+    const text = pdfSafeText(block.text || '');
     const width = CONTENT_WIDTH[pageSize] || CONTENT_WIDTH.A4;
     const longest = Math.max(1, ...text.split('\n').map(line => Array.from(line).length));
 
