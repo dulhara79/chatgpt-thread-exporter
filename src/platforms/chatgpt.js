@@ -11,7 +11,8 @@
   const kit = globalThis.ThreadExporterAdapterKit;
   if (!kit) return;
 
-  const { resolve, visible, present, actionLabel, contentHash, defineAdapter } = kit;
+  const { resolve, visible, present, actionLabel, contentHash, defineAdapter,
+    harvestVirtualizedTurns, groupTurns, outermost } = kit;
 
   const ROLE_SELECTOR = '[data-message-author-role="user"], [data-message-author-role="assistant"]';
   const USER_SELECTOR = '[data-message-author-role="user"]';
@@ -92,7 +93,11 @@
   const adapter = defineAdapter({
     id: 'chatgpt',
     label: 'ChatGPT',
-    virtualized: false,
+
+    // ChatGPT windows long conversations and fetches older messages lazily on
+    // scroll, exactly like Claude does. Treating it as non-virtualized is what
+    // made whole-thread exports silently return only the loaded section.
+    virtualized: true,
 
     matches(url) {
       return /(^|\.)chatgpt\.com$/.test(url.hostname) || /(^|\.)chat\.openai\.com$/.test(url.hostname);
@@ -102,15 +107,26 @@
       return resolve(document, ROOT_CANDIDATES, 'chatgpt.root') || document.body;
     },
 
+    /** Flat, document-ordered message list; pairing happens in the kit. */
+    messages() {
+      const nodes = outermost(resolve(document, [
+        ROLE_SELECTOR,
+        () => Array.from(document.querySelectorAll('[data-message-id]')),
+        () => Array.from(document.querySelectorAll(TURN_CANDIDATES[0]))
+      ], 'chatgpt.messages', { all: true }));
+
+      return nodes.map(node => ({
+        node,
+        role: node.getAttribute('data-message-author-role') === 'user' ? 'user'
+          : node.getAttribute('data-message-author-role') === 'assistant' ? 'assistant'
+            : node.querySelector(USER_SELECTOR) ? 'user' : 'assistant'
+      }));
+    },
+
     turnContainers() {
-      const found = resolve(document, TURN_CANDIDATES, 'chatgpt.turns', {
-        all: true,
-        filter: el => el.querySelector(ROLE_SELECTOR) || el.matches(ROLE_SELECTOR)
-      });
-      // Keep only containers that actually open a turn (contain a user message),
-      // so a regenerated answer does not register as its own turn.
-      const turns = found.filter(el => el.matches(USER_SELECTOR) || el.querySelector(USER_SELECTOR));
-      return turns.length ? turns : found;
+      return groupTurns(adapter.messages())
+        .map(turn => turn.question || turn.answers[0])
+        .filter(Boolean);
     },
 
     userNode(turn) {
@@ -121,18 +137,18 @@
 
     assistantNodes(turn) {
       if (!(turn instanceof Element)) return [];
+      if (turn.matches(ASSISTANT_SELECTOR)) return [turn];
       const inside = Array.from(turn.querySelectorAll(ASSISTANT_SELECTOR));
       if (inside.length) return inside;
 
-      // Synthetic-turn mode: walk forward through the flat role list until the
-      // next user message, collecting every assistant node in between.
-      const all = Array.from(document.querySelectorAll(ROLE_SELECTOR));
-      const start = all.indexOf(turn.matches(USER_SELECTOR) ? turn : turn.querySelector(USER_SELECTOR));
+      // Walk the flat list forward to the next user message.
+      const all = adapter.messages();
+      const start = all.findIndex(message => message.node === turn);
       if (start < 0) return [];
       const out = [];
       for (let i = start + 1; i < all.length; i++) {
-        if (all[i].getAttribute('data-message-author-role') === 'user') break;
-        out.push(all[i]);
+        if (all[i].role === 'user') break;
+        out.push(all[i].node);
       }
       return out;
     },
@@ -209,7 +225,24 @@
 
     attachments(turn) {
       if (!(turn instanceof Element)) return [];
-      return Array.from(turn.querySelectorAll('[data-testid*="attachment" i], [class*="attachment" i]'));
+      const scope = turnOwner(turn) || turn;
+      const found = Array.from(scope.querySelectorAll([
+        '[data-testid*="attachment" i]',
+        '[data-testid*="file" i]',
+        '[class*="attachment" i]',
+        // Long pasted text becomes its own card on ChatGPT too.
+        '[class*="pasted" i]'
+      ].join(', ')));
+      return found.filter(el => !found.some(other => other !== el && other.contains(el)));
+    },
+
+    async ensureFullyLoaded(options = {}) {
+      const result = await harvestVirtualizedTurns(adapter, options);
+      return {
+        complete: result.complete,
+        messages: result.messages,
+        turns: result.turns
+      };
     }
   });
 

@@ -40,13 +40,13 @@ jobs:
           done
 
       - name: Unit and DOM tests
-        run: node --test "tests/*.test.js"
+        run: npm run test:unit
 
       - name: Install Chrome for the offscreen smoke test
         run: npx puppeteer browsers install chrome
 
       - name: Real-Chrome extension smoke test
-        run: xvfb-run -a node --test tests/browser-extension-smoke.mjs
+        run: xvfb-run -a npm run test:smoke
 
       - name: Build store package
         run: npm run build

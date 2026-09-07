@@ -11,7 +11,8 @@
  * @property {string} label
  * @property {(url: URL) => boolean} matches
  * @property {() => Element|null} conversationRoot
- * @property {() => Element[]} turnContainers
+ * @property {() => {node: Element, role: 'user'|'assistant'}[]} messages
+ * @property {() => Element[]} turnContainers  derived from messages(); do not implement
  * @property {(turn: Element) => Element|null} userNode
  * @property {(turn: Element) => Element[]} assistantNodes
  * @property {(node: Element) => Element|null} messageBody
@@ -150,21 +151,41 @@
   }
 
   /**
-   * Find the nearest scrollable ancestor. Both platforms move their scroll
-   * container between releases, so this is derived rather than hard-coded.
+   * Find the element that actually scrolls the conversation.
+   *
+   * Both platforms move this between releases, and it is sometimes a
+   * descendant of the conversation root rather than an ancestor, so check both
+   * directions and fall back to the tallest scrollable candidate.
    */
   function scrollParent(element) {
+    const scrollable = el => {
+      if (!(el instanceof Element)) return false;
+      const overflow = getComputedStyle(el).overflowY;
+      return (overflow === 'auto' || overflow === 'scroll' || overflow === 'overlay') &&
+        el.scrollHeight > el.clientHeight + 8;
+    };
+
     let current = element instanceof Element ? element : null;
     while (current && current !== document.body) {
-      const style = getComputedStyle(current);
-      const overflow = style.overflowY;
-      if ((overflow === 'auto' || overflow === 'scroll' || overflow === 'overlay') &&
-        current.scrollHeight > current.clientHeight + 4) {
-        return current;
-      }
+      if (scrollable(current)) return current;
       current = current.parentElement;
     }
-    return document.scrollingElement || document.documentElement;
+
+    // Nothing above scrolls: look for the tallest scrollable descendant.
+    if (element instanceof Element) {
+      const inner = Array.from(element.querySelectorAll('div, main, section'))
+        .filter(scrollable)
+        .sort((a, b) => b.scrollHeight - a.scrollHeight);
+      if (inner.length) return inner[0];
+    }
+
+    const doc = document.scrollingElement || document.documentElement;
+    if (doc && doc.scrollHeight > doc.clientHeight + 8) return doc;
+
+    const anywhere = Array.from(document.querySelectorAll('div, main, section'))
+      .filter(scrollable)
+      .sort((a, b) => b.scrollHeight - a.scrollHeight);
+    return anywhere[0] || doc;
   }
 
   function sleep(ms) {
@@ -172,88 +193,206 @@
   }
 
   /**
-   * Generic virtualization harvester (F-04).
+   * Merge one window of turn keys into the running ordered list.
    *
-   * Scrolls the conversation container upward in viewport-sized steps,
-   * accumulating turns by stable key so that unmounted turns captured earlier
-   * survive. Returns turns in document order, plus whether the harvest reached
-   * the top of the thread — the caller must surface `complete: false` to the
-   * user rather than exporting silently.
+   * We scroll upward, so each window overlaps the previous one and extends it
+   * at the front. Anchoring on the first shared key keeps the final order
+   * correct even though earlier elements have since been unmounted and can no
+   * longer be compared with compareDocumentPosition.
+   */
+  function mergeWindow(order, windowKeys) {
+    if (!order.length) {
+      order.push(...windowKeys);
+      return;
+    }
+    let anchorIndex = -1;
+    let anchorPosition = -1;
+    for (let i = 0; i < windowKeys.length; i++) {
+      const position = order.indexOf(windowKeys[i]);
+      if (position >= 0) {
+        anchorIndex = i;
+        anchorPosition = position;
+        break;
+      }
+    }
+    if (anchorIndex === -1) {
+      // No overlap at all: this window sits entirely above what we have.
+      order.unshift(...windowKeys);
+      return;
+    }
+    if (anchorIndex > 0) order.splice(anchorPosition, 0, ...windowKeys.slice(0, anchorIndex));
+    for (const key of windowKeys.slice(anchorIndex)) {
+      if (!order.includes(key)) order.push(key);
+    }
+  }
+
+  /**
+   * Scroll the whole conversation into memory (F-04).
+   *
+   * Both platforms window their message list, and both fetch older messages
+   * lazily when you reach the top, so this has to do two different kinds of
+   * waiting: a short settle after each scroll step for the virtualizer to
+   * render, and a longer wait at the very top for a network page to arrive.
+   * Unmounted elements stay reachable because the Map holds a reference, which
+   * keeps their detached subtree alive for later extraction.
    *
    * @param {PlatformAdapter} adapter
-   * @param {{maxSteps?: number, settleMs?: number, onProgress?: Function, signal?: AbortSignal}} [options]
+   * @param {{maxSteps?: number, settleMs?: number, lazyWaitMs?: number, onProgress?: Function, signal?: AbortSignal}} [options]
    */
   async function harvestVirtualizedTurns(adapter, options = {}) {
-    const maxSteps = Number(options.maxSteps || 400);
-    const settleMs = Number(options.settleMs || 130);
+    const maxSteps = Number(options.maxSteps || 600);
+    const settleMs = Number(options.settleMs || 140);
+    const lazyWaitMs = Number(options.lazyWaitMs || 3000);
+
     const root = adapter.conversationRoot();
     const scroller = scrollParent(root);
     const startTop = scroller.scrollTop;
+
     /** @type {Map<string, Element>} */
     const seen = new Map();
+    /** @type {string[]} */
+    const order = [];
 
     const collect = () => {
-      for (const turn of adapter.turnContainers()) {
-        const key = adapter.stableKey(turn);
-        // Re-mounted nodes replace their stale predecessor under the same key.
-        seen.set(key, turn);
+      const windowKeys = [];
+      for (const message of adapter.messages()) {
+        const key = adapter.stableKey(message.node);
+        // A remount replaces the stale node under the same key.
+        seen.set(key, message);
+        windowKeys.push(key);
       }
+      mergeWindow(order, windowKeys);
+      return windowKeys.length;
+    };
+
+    const report = (stage, steps) => {
+      try {
+        options.onProgress?.({ stage, turns: seen.size, steps, maxSteps });
+      } catch {}
     };
 
     collect();
+    report('harvest', 0);
 
-    let idleRounds = 0;
-    let lastTop = Number.NaN;
-    let steps = 0;
+    let stagnantRounds = 0;
     let complete = false;
+    let steps = 0;
 
     while (steps < maxSteps) {
       if (options.signal?.aborted) break;
-      if (scroller.scrollTop <= 1) {
-        // Give the virtualizer one more settle at the very top.
-        await sleep(settleMs);
-        collect();
-        complete = true;
-        break;
+
+      const beforeCount = seen.size;
+      const beforeTop = scroller.scrollTop;
+      const beforeHeight = scroller.scrollHeight;
+
+      if (beforeTop <= 2) {
+        // We are at the top. Older messages may still be loading over the
+        // network, which is exactly the case that silently truncated exports:
+        // the loop used to stop here because scrollTop could not decrease.
+        const grew = await waitForGrowth(scroller, seen, collect, lazyWaitMs, options);
+        if (!grew) {
+          complete = true;
+          break;
+        }
+        report('harvest', steps);
+        continue;
       }
 
-      scroller.scrollTop = Math.max(0, scroller.scrollTop - Math.round(scroller.clientHeight * 0.8));
+      scroller.scrollTop = Math.max(0, beforeTop - Math.round(scroller.clientHeight * 0.75));
       await sleep(settleMs);
       collect();
-
-      idleRounds = scroller.scrollTop === lastTop ? idleRounds + 1 : 0;
-      lastTop = scroller.scrollTop;
       steps += 1;
+      report('harvest', steps);
 
-      try {
-        options.onProgress?.({ stage: 'harvest', turns: seen.size, steps, maxSteps });
-      } catch {}
+      const movedOrGrew =
+        seen.size !== beforeCount ||
+        scroller.scrollTop !== beforeTop ||
+        scroller.scrollHeight !== beforeHeight;
+      stagnantRounds = movedOrGrew ? 0 : stagnantRounds + 1;
 
-      // Three consecutive no-move rounds means the scroller will not go higher.
-      if (idleRounds >= 3) {
-        complete = scroller.scrollTop <= 1;
+      // Four consecutive rounds with no scroll movement, no height change and
+      // no new turns means the scroller genuinely cannot go higher.
+      if (stagnantRounds >= 4) {
+        complete = scroller.scrollTop <= 2;
         break;
       }
     }
 
-    // Restore the reading position the user had before we hijacked the scroller.
+    // Put the reader back where they were.
     scroller.scrollTop = startTop;
-    await sleep(30);
+    await sleep(40);
     collect();
 
-    const ordered = Array.from(seen.values())
-      .filter(el => el instanceof Element)
-      .sort((a, b) => {
-        if (a === b) return 0;
-        const relation = a.compareDocumentPosition(b);
-        if (relation & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
-        if (relation & Node.DOCUMENT_POSITION_PRECEDING) return 1;
-        return 0;
-      });
+    const messages = order.map(key => seen.get(key)).filter(item => item?.node instanceof Element);
+    if (!complete) note('Harvest stopped before reaching the top of the conversation.');
 
-    if (!complete) note('Virtualized harvest stopped before reaching the top of the thread.');
+    return { messages, turns: groupTurns(messages), complete, steps, scroller };
+  }
 
-    return { turns: ordered, complete, steps };
+  /**
+   * At the top of the list, wait for lazily fetched older messages.
+   * Resolves true if anything new appeared, false if the thread is fully loaded.
+   */
+  async function waitForGrowth(scroller, seen, collect, timeoutMs, options) {
+    const startedAt = Date.now();
+    const startHeight = scroller.scrollHeight;
+    const startCount = seen.size;
+
+    while (Date.now() - startedAt < timeoutMs) {
+      if (options.signal?.aborted) return false;
+      await sleep(160);
+      collect();
+      if (seen.size > startCount) return true;
+      if (scroller.scrollHeight > startHeight + 40) {
+        // Content was prepended; step down so the next loop can scroll up again.
+        scroller.scrollTop = Math.min(scroller.scrollHeight, scroller.clientHeight);
+        return true;
+      }
+      // Nudge the loader: some implementations only fetch on an actual event.
+      if (scroller.scrollTop === 0) scroller.scrollTop = 1;
+    }
+    return false;
+  }
+
+  /**
+   * Remove nodes that are contained by another node in the same list.
+   * Selector tiers routinely match both a wrapper and its inner body.
+   */
+  function outermost(nodes) {
+    const list = nodes.filter(node => node instanceof Element);
+    return list.filter(node => !list.some(other => other !== node && other.contains(node)));
+  }
+
+  /**
+   * Group a flat, document-ordered message list into question/answer turns.
+   *
+   * Deliberately NOT based on a per-turn container element. Neither platform
+   * guarantees that a user message and its answer share a wrapper — assuming
+   * they did is what produced turns with a question and zero answers.
+   *
+   * @param {{node: Element, role: 'user'|'assistant'}[]} messages
+   */
+  function groupTurns(messages) {
+    const turns = [];
+    let current = null;
+
+    for (const message of messages || []) {
+      if (!message?.node) continue;
+      if (message.role === 'user') {
+        current = { question: message.node, answers: [] };
+        turns.push(current);
+      } else {
+        // An assistant message before any user message (a shared link opening
+        // mid-thread, or a system greeting) still deserves a turn.
+        if (!current) {
+          current = { question: null, answers: [] };
+          turns.push(current);
+        }
+        current.answers.push(message.node);
+      }
+    }
+
+    return turns;
   }
 
   /** Fills in the optional half of the adapter interface. */
@@ -265,8 +404,13 @@
       attachments: () => [],
       answerActionRow: () => null,
       headerAnchor: () => null,
+      /** Derived from `messages()`; adapters no longer implement this. */
+      turnContainers() {
+        return groupTurns(this.messages()).map(turn => turn.question || turn.answers[0]).filter(Boolean);
+      },
       async ensureFullyLoaded() {
-        return { complete: true, turns: this.turnContainers().length };
+        const messages = this.messages();
+        return { complete: true, messages, turns: groupTurns(messages) };
       }
     };
     return Object.freeze(Object.assign(Object.create(null), base, definition));
@@ -281,6 +425,9 @@
     scrollParent,
     sleep,
     harvestVirtualizedTurns,
+    mergeWindow,
+    groupTurns,
+    outermost,
     defineAdapter,
     diagnostics: {
       snapshot: snapshotDiagnostics,

@@ -17,7 +17,9 @@ function findBlock(blocks, type) {
 test('ChatGPT: registry resolves the adapter by hostname', () => {
   const page = loadPage(fixture('chatgpt-thread.html'), 'https://chatgpt.com/c/abc');
   assert.equal(page.adapter.id, 'chatgpt');
-  assert.equal(page.adapter.virtualized, false);
+  // ChatGPT windows long threads too; both platforms must harvest before export.
+  assert.equal(page.adapter.virtualized, true);
+  assert.equal(typeof page.adapter.ensureFullyLoaded, 'function');
 });
 
 test('ChatGPT: turns, roles and title resolve', () => {
@@ -88,10 +90,11 @@ test('Claude: registry resolves the adapter and flags virtualization', () => {
 
 test('Claude: turns pair inside their container rather than by document order', () => {
   const page = loadPage(fixture('claude-thread.html'), 'https://claude.ai/chat/xyz');
-  const turns = page.adapter.turnContainers();
-  assert.equal(turns.length, 2);
-  assert.equal(page.adapter.userNode(turns[0]).textContent.trim(), 'Summarise the findings.');
-  assert.equal(page.adapter.assistantNodes(turns[0]).length, 1);
+  const groups = page.window.ThreadExporterAdapterKit.groupTurns(page.adapter.messages());
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].question.textContent.trim(), 'Summarise the findings.');
+  assert.equal(groups[0].answers.length, 1, 'the answer must pair with its question');
+  assert.equal(groups[1].answers.length, 1);
 });
 
 test('Claude: title strips the site suffix', () => {
@@ -132,7 +135,7 @@ test('Claude: selector diagnostics record which tier matched', () => {
   const page = loadPage(fixture('claude-thread.html'), 'https://claude.ai/chat/xyz');
   page.adapter.turnContainers();
   const snapshot = page.window.ThreadExporterAdapterKit.diagnostics.snapshot();
-  assert.ok(Object.keys(snapshot.tierHits).some(key => key.startsWith('claude.turns#')));
+  assert.ok(Object.keys(snapshot.tierHits).some(key => key.startsWith('claude.messages#')));
 });
 
 test('an unsupported host resolves to no adapter', () => {

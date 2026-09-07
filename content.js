@@ -56,33 +56,161 @@
   // Extraction
   // ------------------------------------------------------------------
 
-  function messageFrom(node, role) {
+  async function messageFrom(node, role) {
     const body = adapter.messageBody(node) || node;
+    const isAssistant = role === 'assistant';
+
+    // Artifact bodies live in a side panel, so capturing them means opening
+    // each one. Only done for assistant messages, and only when enabled.
+    let artifacts = [];
+    if (isAssistant && settings.includeArtifacts !== false) {
+      artifacts = typeof adapter.captureArtifacts === 'function'
+        ? await adapter.captureArtifacts(node)
+        : adapter.artifacts(node);
+    }
+
     const blocks = extractor.fromMessage(body, {
-      artifacts: role === 'assistant' ? adapter.artifacts(node) : [],
-      thinking: role === 'assistant' ? adapter.thinkingBlocks(node) : [],
+      artifacts,
+      thinking: isAssistant ? adapter.thinkingBlocks(node) : [],
       includeThinking: settings.includeThinking,
-      includeArtifacts: settings.includeArtifacts
+      includeArtifacts: settings.includeArtifacts !== false
     });
     if (!blocks.length) return null;
     return { role, blocks, text: IR.blocksToPlainText(blocks) };
   }
 
-  function turnFrom(container, index) {
-    const userNode = adapter.userNode(container);
-    if (!userNode) return null;
-    const question = messageFrom(userNode, 'user');
-    if (!question) return null;
-    const answers = adapter.assistantNodes(container)
-      .map(node => messageFrom(node, 'assistant'))
-      .filter(Boolean);
+  /** A question we could not parse still beats dropping the turn entirely. */
+  function fallbackMessage(node, role) {
+    const text = extractor.preservedText
+      ? extractor.preservedText(node)
+      : (node?.textContent || '');
+    const clean = String(text || '').replace(/\u00a0/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+    if (!clean) return null;
+    return {
+      role,
+      blocks: [{ type: 'paragraph', inline: [{ type: 'text', text: clean }] }],
+      text: clean
+    };
+  }
+
+  /**
+   * Build one turn from a question node and its answer nodes.
+   *
+   * A turn survives if EITHER side has content. Previously a question that
+   * failed to parse — a long pasted block, an attachment-only message —
+   * discarded the answer with it, which is what produced
+   * "No question-and-answer content was found on this page."
+   */
+  async function turnFrom(group, index) {
+    const questionNode = group.question;
+    const answerNodes = group.answers || [];
+
+    let question = questionNode ? await messageFrom(questionNode, 'user') : null;
+
+    // A pasted block or attachment card sits outside the message body, so the
+    // body can parse to nothing while the message clearly has content. Read
+    // the whole node rather than exporting an empty question section.
+    if (questionNode && (!question || !question.text.trim())) {
+      question = fallbackMessage(questionNode, 'user') || question;
+    }
+
+    const answers = [];
+    for (const node of answerNodes) {
+      let message = await messageFrom(node, 'assistant');
+      if (!message) message = fallbackMessage(node, 'assistant');
+      if (message) answers.push(message);
+    }
+
+    // Attachments and pasted files sit outside the message body.
+    if (questionNode) {
+      const existing = question ? question.text : '';
+      const extras = attachmentBlocks(questionNode).filter(block => {
+        // Skip anything the question body already contains verbatim.
+        const text = IR.blocksToPlainText([block]).trim();
+        return text && !(text.length > 24 && existing.includes(text));
+      });
+      if (extras.length) {
+        if (question) question.blocks = question.blocks.concat(extras);
+        else question = { role: 'user', blocks: extras, text: IR.blocksToPlainText(extras) };
+      }
+    }
+
+    if (!question && !answers.length) return null;
+
     return {
       id: 'turn-' + (index + 1),
       index,
-      key: adapter.stableKey(container),
-      question,
+      key: adapter.stableKey(questionNode || answerNodes[0]),
+      question: question || { role: 'user', blocks: [], text: '' },
       answers: answers.length ? answers : [{ role: 'assistant', blocks: [], text: '' }]
     };
+  }
+
+  async function turnsFromGroups(groups) {
+    const turns = [];
+    for (let index = 0; index < groups.length; index++) {
+      const turn = await turnFrom(groups[index], index);
+      if (turn) turns.push(turn);
+    }
+    return turns;
+  }
+
+  const ARCHIVE_EXT = /\.(tar|tar\.gz|tgz|zip|gz|bz2|xz|7z|rar|exe|dll|bin|so|dylib|pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|webp|mp4|mp3|wav)$/i;
+
+  /**
+   * Blocks for files attached to a message.
+   *
+   * Text-like attachments (.py, .md, .html, .patch, .json ...) have their
+   * content in the DOM once expanded, so it is exported as a code block.
+   * Archives and binaries do not — their bytes are never in the page — so they
+   * are recorded by name instead of being silently dropped or half-rendered.
+   */
+  function attachmentBlocks(node) {
+    const blocks = [];
+    const seen = new Set();
+
+    for (const element of adapter.attachments(node) || []) {
+      const name = String(
+        element.getAttribute?.('data-filename') ||
+        element.getAttribute?.('aria-label') ||
+        element.querySelector?.('[class*="name" i], [class*="title" i]')?.textContent ||
+        element.textContent || ''
+      ).replace(/\s+/g, ' ').trim().slice(0, 120);
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+
+      const filename = (name.match(/[\w.-]+\.[A-Za-z0-9]{1,8}/) || [name])[0];
+
+      if (ARCHIVE_EXT.test(filename)) {
+        // The archive's bytes are not in the page; the extension cannot open
+        // it, so say so rather than emitting an empty or broken block.
+        blocks.push({
+          type: 'paragraph',
+          inline: [{
+            type: 'em',
+            children: [{ type: 'text', text: `Attachment: ${filename} (binary file, contents not available in the page)` }]
+          }]
+        });
+        continue;
+      }
+
+      const pre = element.querySelector?.('pre');
+      const body = pre ? pre : element.querySelector?.('[class*="font-mono" i], [class*="content" i]');
+      const text = body ? extractor.preservedText(body) : '';
+
+      if (text.trim()) {
+        const lang = (filename.match(/\.([A-Za-z0-9]+)$/) || [, ''])[1].toLowerCase();
+        blocks.push({ type: 'heading', level: 4, inline: [{ type: 'text', text: 'Attachment: ' + filename }] });
+        blocks.push({ type: 'code', lang, text, diagram: false });
+      } else {
+        blocks.push({
+          type: 'paragraph',
+          inline: [{ type: 'em', children: [{ type: 'text', text: 'Attachment: ' + filename }] }]
+        });
+      }
+    }
+
+    return blocks;
   }
 
   function baseDocument() {
@@ -101,27 +229,68 @@
    * top — a partial export must never be silent (F-04).
    */
   async function extractConversation(options = {}) {
-    let containers = adapter.turnContainers();
+    let groups = kit.groupTurns(adapter.messages());
     let complete = true;
 
     if (adapter.virtualized) {
       const harvest = await adapter.ensureFullyLoaded({ onProgress: options.onProgress });
-      if (harvest.containers?.length) containers = harvest.containers;
+      if (harvest.turns?.length) groups = harvest.turns;
       complete = harvest.complete;
     }
 
-    const turns = containers.map((container, index) => turnFrom(container, index)).filter(Boolean);
+    const turns = await turnsFromGroups(groups);
     return { ...baseDocument(), turns, complete };
   }
 
-  function extractTurnsByKeys(keys) {
-    const wanted = new Set(keys);
-    const turns = adapter.turnContainers()
-      .map((container, index) => ({ container, index }))
-      .filter(entry => wanted.has(adapter.stableKey(entry.container)))
-      .map(entry => turnFrom(entry.container, entry.index))
-      .filter(Boolean);
-    if (!turns.length) throw new Error('This answer changed while the export menu was open. Please try again.');
+  /**
+   * Export specific turns.
+   *
+   * Takes the elements themselves rather than re-resolving them by key: the
+   * old key round-trip failed whenever the page re-rendered between opening
+   * the menu and clicking a format, which on Claude is most of the time.
+   * Keys are only used to recover the turn's position in the thread, and a
+   * detached element still yields correct content because we hold a reference
+   * to its subtree.
+   */
+  async function extractTurns(entries) {
+    const live = kit.groupTurns(adapter.messages());
+    const resolved = [];
+
+    for (const entry of entries) {
+      // Prefer the live group, so a re-render between opening the menu and
+      // choosing a format cannot lose the answers.
+      let group = live.find(candidate =>
+        candidate.question === entry.container ||
+        candidate.answers.includes(entry.container));
+
+      if (!group) {
+        group = live.find(candidate => {
+          const anchor = candidate.question || candidate.answers[0];
+          return anchor && adapter.stableKey(anchor) === entry.key;
+        });
+      }
+      // Fall back to the captured group: a detached subtree still has content.
+      if (!group) group = entry.group;
+      if (!group) continue;
+
+      const position = live.indexOf(group);
+      resolved.push({ group, index: position >= 0 ? position : entry.index });
+    }
+
+    if (!resolved.length) {
+      throw new Error('Could not read this answer from the page. Reload the conversation and try again.');
+    }
+
+    resolved.sort((a, b) => a.index - b.index);
+    const turns = [];
+    for (const item of resolved) {
+      const turn = await turnFrom(item.group, item.index);
+      if (turn) turns.push(turn);
+    }
+
+    if (!turns.length) {
+      throw new Error('Could not read any content from this answer. Reload the conversation and try again.');
+    }
     return { ...baseDocument(), turns, complete: true };
   }
 
@@ -169,30 +338,51 @@
   // Per-answer control
   // ------------------------------------------------------------------
 
-  /** Turn keys currently marked for a range export (shift-click). */
-  const selection = new Set();
+  /** Turns marked for a range export (shift-click), keyed for de-duplication. */
+  const selection = new Map();
 
-  function footerRowFor(container, key) {
-    const existing = Array.from(container.querySelectorAll(':scope > .cgx-answer-row'))
+  /**
+   * Place the control immediately after the last answer of the turn.
+   *
+   * Anchoring on the answer element rather than on a turn container puts the
+   * button in the same visual position on both platforms — the end of the
+   * answer — and works on Claude, where a user message and its answer do not
+   * share a wrapper.
+   */
+  function footerRowFor(lastAnswer, key) {
+    const parent = lastAnswer.parentElement;
+    if (!parent) return null;
+
+    const existing = Array.from(parent.querySelectorAll(':scope > .cgx-answer-row'))
       .find(row => row.dataset.cgxKey === key);
-    if (existing) return existing;
+    if (existing) {
+      // Keep it directly after the answer even if the site reordered children.
+      if (existing.previousElementSibling !== lastAnswer) {
+        lastAnswer.insertAdjacentElement('afterend', existing);
+      }
+      return existing;
+    }
 
     const row = document.createElement('div');
     row.className = 'cgx-answer-row';
     row.setAttribute(HOST_ATTR, 'true');
     row.dataset.cgxKey = key;
-    row.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin:6px 0 14px;';
-    container.appendChild(row);
+    row.style.cssText = 'display:flex;justify-content:flex-start;align-items:center;gap:8px;margin:2px 0 10px;';
+    lastAnswer.insertAdjacentElement('afterend', row);
     return row;
   }
 
-  function decorateTurn(container) {
-    if (!(container instanceof Element) || !container.isConnected) return;
-    const assistants = adapter.assistantNodes(container);
-    if (!assistants.length) return;
+  function decorateTurn(group, index = -1) {
+    const answers = group?.answers || [];
+    if (!answers.length) return;
 
-    const key = adapter.stableKey(container);
-    const row = footerRowFor(container, key);
+    const lastAnswer = answers[answers.length - 1];
+    if (!(lastAnswer instanceof Element) || !lastAnswer.isConnected) return;
+
+    const anchor = group.question || lastAnswer;
+    const key = adapter.stableKey(anchor);
+    const row = footerRowFor(lastAnswer, key);
+    if (!row) return;
 
     let control = row.querySelector('.' + ANSWER_HOST_CLASS);
     if (!control) {
@@ -204,24 +394,30 @@
       created.button.addEventListener('click', event => {
         event.preventDefault();
         event.stopPropagation();
-        const turnKey = control.dataset.cgxKey;
+        const entry = control.__cgxEntry;
+        if (!entry) return;
 
         if (event.shiftKey) {
-          if (selection.has(turnKey)) selection.delete(turnKey);
-          else selection.add(turnKey);
+          if (selection.has(entry.key)) selection.delete(entry.key);
+          else selection.set(entry.key, entry);
           refreshSelectionStyles();
           return;
         }
 
-        const keys = selection.size ? Array.from(selection) : [turnKey];
-        const heading = keys.length > 1 ? `Export ${keys.length} selected Q&A turns` : 'Export this Q&A';
-        openMenu(control, heading, () => extractTurnsByKeys(keys));
+        const entries = selection.size ? Array.from(selection.values()) : [entry];
+        const heading = entries.length > 1
+          ? `Export ${entries.length} selected Q&A turns`
+          : 'Export this Q&A';
+        openMenu(control, heading, () => extractTurns(entries));
       });
     }
 
     control.dataset.cgxKey = key;
+    // Hold the group itself; re-resolving by key alone was the failure mode.
+    control.__cgxEntry = { container: anchor, group, key, index };
+    if (selection.has(key)) selection.set(key, control.__cgxEntry);
     const { button } = control.__cgx;
-    const streaming = assistants.some(node => adapter.isStreaming(node));
+    const streaming = answers.some(node => adapter.isStreaming(node));
 
     button.disabled = streaming;
     button.setAttribute('aria-disabled', String(streaming));
@@ -266,14 +462,22 @@
       });
     }
 
-    if (anchor?.parentElement) {
+    if (anchor?.parentElement && anchor.isConnected) {
+      host.style.position = '';
+      host.style.inset = '';
+      host.style.zIndex = '';
       if (host.nextElementSibling !== anchor) anchor.parentElement.insertBefore(host, anchor);
       return;
     }
-    if (!host.isConnected) {
-      const fallback = document.querySelector('header') || document.body;
-      fallback.appendChild(host);
-    }
+
+    // No usable header anchor. Appending to <body> put the button at the very
+    // bottom of the page, where it looked like it had simply not appeared, so
+    // pin it instead — always visible, never in the message flow.
+    host.style.position = 'fixed';
+    host.style.top = '12px';
+    host.style.right = '76px';
+    host.style.zIndex = '2147483646';
+    if (host.parentElement !== document.body) document.body.appendChild(host);
   }
 
   // ------------------------------------------------------------------
@@ -465,27 +669,24 @@
     frame = 0;
     deadline = 0;
 
-    if (fullPass) {
-      fullPass = false;
-      pending.clear();
-      adapter.turnContainers().forEach(decorateTurn);
-    } else {
-      const roots = Array.from(pending);
-      pending.clear();
-      roots.forEach(decorateTurn);
-    }
+    // Decoration always works from the full group list: a turn's answers can
+    // live outside the mutated subtree, so a partial pass would miss them.
+    const groups = kit.groupTurns(adapter.messages());
+    pending.clear();
+    fullPass = false;
+    groups.forEach((group, index) => decorateTurn(group, index));
     decorateThread();
   }
 
   function schedule(mutations = null) {
     if (Array.isArray(mutations)) {
+      // Any mutation outside our own UI triggers a re-decoration pass; the
+      // pass itself is cheap and correct, and rAF coalesces bursts.
       for (const mutation of mutations) {
         const target = mutation.target instanceof Element ? mutation.target : null;
-        if (!target) continue;
-        if (target.closest?.('[' + HOST_ATTR + ']')) continue;
-        const container = adapter.turnContainers().find(turn => turn === target || turn.contains(target));
-        if (container) pending.add(container);
-        else fullPass = true;
+        if (target?.closest?.('[' + HOST_ATTR + ']')) continue;
+        fullPass = true;
+        break;
       }
     } else {
       fullPass = true;

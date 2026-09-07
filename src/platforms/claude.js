@@ -20,7 +20,7 @@
 
   const {
     resolve, visible, present, actionLabel, contentHash,
-    defineAdapter, harvestVirtualizedTurns
+    defineAdapter, harvestVirtualizedTurns, sleep, groupTurns, outermost
   } = kit;
 
   const USER_SELECTOR = 'div[data-testid="user-message"], .font-user-message';
@@ -56,9 +56,26 @@
   const HEADER_CANDIDATES = [
     'button[data-testid="share-conversation"]',
     'button[aria-label*="Share" i]',
-    () => Array.from(document.querySelectorAll('header button, [role="banner"] button'))
-      .find(button => actionLabel(button).includes('share')) || null,
-    () => document.querySelector('header') || null
+    () => Array.from(document.querySelectorAll('header button, [role="banner"] button, [class*="sticky" i] button'))
+      .find(button => /share|upgrade|model/i.test(actionLabel(button))) || null,
+    // The chat title control sits in the top bar on every Claude layout so far.
+    'button[data-testid="chat-menu-trigger"]',
+    () => {
+      // Last resort: the top-most bar that holds a small number of buttons and
+      // is not part of the message flow.
+      const bars = Array.from(document.querySelectorAll('header, [role="banner"], div[class*="sticky" i]'))
+        .filter(bar => {
+          const rect = bar.getBoundingClientRect();
+          if (rect.top > 120 || rect.width < 240) return false;
+          const buttons = bar.querySelectorAll('button');
+          return buttons.length > 0 && buttons.length <= 12;
+        })
+        .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+      const bar = bars[0];
+      if (!bar) return null;
+      const buttons = Array.from(bar.querySelectorAll('button')).filter(present);
+      return buttons[buttons.length - 1] || null;
+    }
   ];
 
   const ARTIFACT_CANDIDATES = [
@@ -117,13 +134,39 @@
       return resolve(document, ROOT_CANDIDATES, 'claude.root') || document.body;
     },
 
+    /**
+     * Flat, document-ordered message list.
+     *
+     * Claude does NOT reliably wrap a user message and its answer in one
+     * element — each message gets its own wrapper. Pairing is done from this
+     * ordered list instead, which is why answers no longer come back empty.
+     */
+    messages() {
+      const root = adapter.conversationRoot() || document.body;
+
+      let nodes = resolve(root, [
+        () => Array.from(root.querySelectorAll(USER_SELECTOR + ', ' + ASSISTANT_SELECTOR)),
+        () => Array.from(document.querySelectorAll(USER_SELECTOR + ', ' + ASSISTANT_SELECTOR)),
+        // Last resort: any turn wrapper that carries readable text.
+        () => Array.from(document.querySelectorAll('div[data-test-render-count]'))
+          .filter(el => (el.textContent || '').trim().length > 0)
+      ], 'claude.messages', { all: true });
+
+      nodes = outermost(nodes);
+
+      return nodes.map(node => ({
+        node,
+        role: node.matches(USER_SELECTOR) ? 'user'
+          : node.matches(ASSISTANT_SELECTOR) ? 'assistant'
+            // Heuristic tier: infer the role from whichever marker it contains.
+            : node.querySelector(USER_SELECTOR) ? 'user' : 'assistant'
+      }));
+    },
+
     turnContainers() {
-      const root = adapter.conversationRoot();
-      const found = resolve(root, TURN_CANDIDATES, 'claude.turns', { all: true });
-      // A turn is only a turn once it owns a user message; Claude reuses the
-      // same wrapper for standalone system/notice rows.
-      const withUser = found.filter(el => el.querySelector(USER_SELECTOR) || el.matches(USER_SELECTOR));
-      return withUser.length ? withUser : found;
+      return groupTurns(adapter.messages())
+        .map(turn => turn.question || turn.answers[0])
+        .filter(Boolean);
     },
 
     userNode(turn) {
@@ -134,7 +177,20 @@
 
     assistantNodes(turn) {
       if (!(turn instanceof Element)) return [];
-      return Array.from(turn.querySelectorAll(ASSISTANT_SELECTOR));
+      if (turn.matches(ASSISTANT_SELECTOR)) return [turn];
+      const inside = Array.from(turn.querySelectorAll(ASSISTANT_SELECTOR));
+      if (inside.length) return inside;
+      // The turn anchor is a user message: walk the flat list forward to the
+      // next user message, collecting the answers in between.
+      const all = adapter.messages();
+      const start = all.findIndex(message => message.node === turn);
+      if (start < 0) return [];
+      const out = [];
+      for (let i = start + 1; i < all.length; i++) {
+        if (all[i].role === 'user') break;
+        out.push(all[i].node);
+      }
+      return out;
     },
 
     messageBody(node) {
@@ -215,7 +271,9 @@
     },
 
     artifacts(turn) {
-      const cards = artifactCards(turn);
+      // Accepts either the user or the assistant node: artifact cards live in
+      // the assistant message, which may not be a descendant of the anchor.
+      const cards = artifactCards(turnOwner(turn) || turn);
       if (!cards.length) return [];
       // If the side panel happens to be open, hand back the rendered body too
       // so the extractor can inline real content instead of a placeholder.
@@ -224,6 +282,57 @@
         card.__cgxArtifactPanel = panel && visible(panel) ? panel : null;
         return card;
       });
+    },
+
+    /**
+     * Open each artifact so its body can be exported.
+     *
+     * Artifacts render in a side panel rather than in the message, so a
+     * closed artifact exports as a stub. This clicks each card, waits for the
+     * panel to render, snapshots it (detached, so it survives the panel
+     * closing), and restores the previous panel state.
+     */
+    async captureArtifacts(node) {
+      const owner = turnOwner(node) || node;
+      const cards = artifactCards(owner);
+      if (!cards.length) return [];
+
+      const panelWasOpen = Boolean(resolve(document, ARTIFACT_CANDIDATES, 'claude.artifactPanel'));
+
+      for (const card of cards) {
+        if (card.__cgxArtifactPanel) continue;
+        try {
+          const button = card.matches('button') ? card : card.querySelector('button') || card;
+          button.click();
+
+          // Wait for the panel to mount and stop changing size.
+          let panel = null;
+          let lastLength = -1;
+          for (let attempt = 0; attempt < 25; attempt++) {
+            await sleep(120);
+            panel = resolve(document, ARTIFACT_CANDIDATES, 'claude.artifactPanel');
+            const length = panel?.textContent?.length ?? -1;
+            if (panel && length > 0 && length === lastLength) break;
+            lastLength = length;
+          }
+
+          // Snapshot: cloning detaches it from the panel we are about to reuse
+          // for the next artifact, so each card keeps its own content.
+          card.__cgxArtifactPanel = panel ? panel.cloneNode(true) : null;
+        } catch {
+          card.__cgxArtifactPanel = null;
+        }
+      }
+
+      if (!panelWasOpen) {
+        const close = document.querySelector(
+          'button[aria-label*="Close" i], button[data-testid="close-artifact"]'
+        );
+        try { close?.click(); } catch {}
+        await sleep(80);
+      }
+
+      return cards;
     },
 
     thinkingBlocks(node) {
@@ -235,15 +344,28 @@
 
     attachments(turn) {
       if (!(turn instanceof Element)) return [];
-      return Array.from(turn.querySelectorAll('[data-testid*="file" i], [class*="attachment" i]'));
+      const scope = turn.matches(USER_SELECTOR) ? (turnOwner(turn) || turn) : turn;
+      const found = Array.from(scope.querySelectorAll([
+        '[data-testid*="file" i]',
+        '[data-testid*="attachment" i]',
+        '[data-testid*="paste" i]',
+        '[class*="attachment" i]',
+        // Claude shows long pasted text as its own collapsible card; its
+        // contents were being dropped, leaving the question section blank.
+        '[class*="pasted" i]',
+        'button[aria-label*="paste" i]'
+      ].join(', ')));
+
+      // Some layouts nest the chip inside its own wrapper; keep the outermost.
+      return found.filter(el => !found.some(other => other !== el && other.contains(el)));
     },
 
     async ensureFullyLoaded(options = {}) {
       const result = await harvestVirtualizedTurns(adapter, options);
       return {
         complete: result.complete,
-        turns: result.turns.length,
-        containers: result.turns
+        messages: result.messages,
+        turns: result.turns
       };
     }
   });

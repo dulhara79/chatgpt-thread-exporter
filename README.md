@@ -1,4 +1,4 @@
-# AI Thread Exporter (V0.6.0)
+# AI Thread Exporter (V0.6.3)
 
 Export a **ChatGPT** or **Claude** conversation — the whole thread, a range, or a single
 question-and-answer pair — to a properly structured **PDF**, **Word (.docx)** or **Markdown**
@@ -71,11 +71,12 @@ Markdown is an output format here, not a transport.
 
 Stated plainly, because these matter more than feature lists:
 
-- **Claude virtualizes long conversations.** Only part of a long thread is in the page at any time.
-  The exporter scrolls the thread to gather it, but if it cannot reach the top it tells you how many
-  turns it got and marks the export *partial*. Scroll to the top yourself and retry for a complete export.
-- **Claude artifacts** live in a side panel, not in the message. Open the artifact panel before exporting
-  to capture its content; otherwise a placeholder is written in its place.
+- **Both platforms window long conversations** and fetch older messages lazily. The exporter scrolls the
+  whole thread into memory first, waiting for each lazily loaded page. If it still cannot reach the top it
+  tells you how many turns it captured and marks the export *partial* — it never truncates silently.
+  Very long threads take a few seconds; the progress line shows the running turn count.
+- **Claude artifacts** live in a side panel. The exporter opens each one, captures it, and restores the
+  panel. If an artifact cannot be opened, the document says so in its place rather than exporting a blank.
 - **PDFs are not tagged.** There is no structure tree, no reading order and no alt text in the PDF output,
   so it is not PDF/UA or PDF/A conformant. Word output is better for accessibility. Fixing this properly
   means replacing pdfmake.
@@ -83,6 +84,9 @@ Stated plainly, because these matter more than feature lists:
   font formats pdfmake cannot embed.
 - **Syntax highlighting** is not implemented. Code blocks are monospaced and shaded but not coloured.
 - **Response branches.** If you have regenerated an answer, only the variant currently displayed is exported.
+- **File attachments.** Text-like files (`.py`, `.md`, `.html`, `.patch`, `.json`, ...) export their contents
+  when the page exposes them. Archives and binaries (`.zip`, `.tar.gz`, `.png`, `.docx`) are recorded by name
+  only — their bytes are never in the page, so the exporter cannot open them.
 - **Selectors are unverified against the live sites** in this release. They are derived from public tooling and
   fixture DOM. Verify with Settings → **Generate report** and open an issue if a tier-1 selector is missing.
 
@@ -90,8 +94,8 @@ Stated plainly, because these matter more than feature lists:
 
 ```bash
 npm install
-npm test              # unit + DOM tests (68)
-npm run test:dom      # adapters and DOM extraction only
+npm test              # every suite (106 tests)
+npm run test:unit     # fast suites, no browser needed
 npm run version:check # fail on manifest/package/README drift
 npm run build         # dist/ai-thread-exporter-<version>.zip
 ```
@@ -104,6 +108,8 @@ The suite is deliberately split:
 | `tests/adapters.test.js` | Both adapters against fixture DOM in jsdom |
 | `tests/renderers.test.js` | IR → PDF definition and IR → real .docx package |
 | `tests/architecture-guards.test.js` | Invariants not observable from output (permissions, coupling) |
+| `tests/reported-issues.test.js` | Regressions reported from real-world use |
+| `tests/font-coverage.test.js` | Reads the bundled font cmaps so no character is routed to a font lacking its glyph |
 | `tests/pdf-font-smoke.test.js` | Renders a real multi-script PDF with the bundled fonts |
 | `tests/browser-extension-smoke.mjs` | Loads the extension in real Chrome; selector canary |
 

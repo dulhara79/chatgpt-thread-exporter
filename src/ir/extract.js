@@ -31,6 +31,64 @@
     return String(text || '').replace(/\u00a0/g, ' ').replace(/[ \t]+/g, ' ');
   }
 
+  const DIAGRAM_CHARS = /[┌┐└┘├┤┬┴┼│─━┃┏┓┗┛┣┫┳┻╋╭╮╰╯▼▲►◄→←⇒⇐]/u;
+
+  /**
+   * Text with runs of spaces and line breaks intact.
+   *
+   * `normalizeWhitespace` collapses runs of spaces, which is right for prose
+   * and fatal for character diagrams — it is what turned box-drawing art into
+   * a single unaligned line. Used wherever layout is carried by whitespace.
+   */
+  function preservedText(el) {
+    const out = [];
+    const walk = node => {
+      for (const child of Array.from(node.childNodes)) {
+        if (child.nodeType === Node.TEXT_NODE) {
+          out.push(String(child.nodeValue || '').replace(/\u00a0/g, ' '));
+          continue;
+        }
+        if (child.nodeType !== Node.ELEMENT_NODE) continue;
+        if (child.matches?.(SKIP_SELECTOR)) continue;
+        const tag = child.tagName.toLowerCase();
+        if (tag === 'br') { out.push('\n'); continue; }
+        walk(child);
+        if (['p', 'div', 'li', 'tr'].includes(tag)) out.push('\n');
+      }
+    };
+    walk(el);
+    return out.join('').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
+  }
+
+  function computedWhiteSpace(el) {
+    try {
+      return String(el.ownerDocument?.defaultView?.getComputedStyle(el)?.whiteSpace || '');
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * True when an element carries a character diagram outside a <pre>.
+   *
+   * Both platforms sometimes emit box-drawing art as a styled div or a
+   * paragraph full of <br>, where collapsing whitespace destroys the alignment.
+   */
+  function looksLikeCharacterDiagram(el) {
+    if (!(el instanceof Element)) return false;
+    if (el.tagName.toLowerCase() === 'pre') return false;
+    if (el.querySelector('pre, table, ul, ol, img')) return false;
+
+    const text = el.textContent || '';
+    if (!DIAGRAM_CHARS.test(text)) return false;
+
+    const preserved = computedWhiteSpace(el).startsWith('pre');
+    const multiline = el.querySelectorAll('br').length >= 2 || /\n\s*\S[\s\S]*\n/.test(text);
+    if (!preserved && !multiline) return false;
+
+    return preservedText(el).split('\n').filter(line => line.trim()).length >= 2;
+  }
+
   function shouldIncludeImage(meta) {
     const helper = globalThis.ThreadExporter?.shouldIncludeImage;
     if (typeof helper === 'function') return helper(meta);
@@ -184,7 +242,10 @@
 
   function codeBlockFrom(el) {
     const codeEl = el.querySelector('code');
-    const text = String(codeEl?.textContent ?? el.textContent ?? '').replace(/\s+$/, '');
+    // textContent on <pre> already preserves whitespace; keep it verbatim.
+    const text = String(codeEl?.textContent ?? el.textContent ?? '')
+      .replace(/\u00a0/g, ' ')
+      .replace(/\s+$/, '');
     const cls = String(codeEl?.getAttribute('class') || el.getAttribute('class') || '');
     const lang = (cls.match(/language-([\w-]+)/i)?.[1] || el.getAttribute('data-language') || '').trim();
     return { type: 'code', lang, text, diagram: IR.isDiagram(lang, text) };
@@ -276,6 +337,15 @@
 
       if (options.inlineOnly && !['ul', 'ol', 'pre', 'table', 'blockquote'].includes(tag)) {
         pending.push(...inlineNodesFor(child));
+        continue;
+      }
+
+      // A character diagram outside <pre> must become a code block, or its
+      // alignment is destroyed by whitespace collapsing.
+      if (looksLikeCharacterDiagram(child)) {
+        flush();
+        const text = preservedText(child);
+        blocks.push({ type: 'code', lang: '', text, diagram: true });
         continue;
       }
 
@@ -371,6 +441,132 @@
     });
   }
 
+  /** Guesses a language from an artifact title or panel class names. */
+  function artifactLanguage(title, panel) {
+    const fromTitle = /\.(jsx?|tsx?|py|java|rb|go|rs|c|cpp|cs|php|sh|sql|html|css|json|ya?ml|xml|md)$/i.exec(title || '');
+    if (fromTitle) return fromTitle[1].toLowerCase();
+    const cls = String(panel?.getAttribute?.('class') || '');
+    return (cls.match(/language-([\w-]+)/i)?.[1] || '').toLowerCase();
+  }
+
+  /**
+   * A Claude artifact.
+   *
+   * Code and file artifacts render in the panel as a stack of styled line
+   * divs, so extracting them as prose loses the indentation entirely. Those
+   * are emitted as a single code block with whitespace preserved; document and
+   * markdown artifacts keep their normal block structure.
+   */
+  /**
+   * Artifact title.
+   *
+   * A card's textContent is the title AND its type label AND often a line
+   * count, all run together — "…Intake AnalysisDocument". Prefer an explicit
+   * title element, then the first line only, then strip a trailing type word.
+   */
+  function artifactTitle(card) {
+    const explicit = card.querySelector?.('[class*="title" i], h1, h2, h3')?.textContent;
+    const raw = String(
+      explicit ||
+      card.getAttribute?.('aria-label') ||
+      (typeof preservedText === 'function' ? preservedText(card) : card.textContent) ||
+      'Artifact'
+    );
+
+    let title = normalizeWhitespace(raw.split('\n')[0]).trim();
+    // Strip a type label the card appends with no separator.
+    title = title.replace(
+      /(Document|Code|React component|HTML|SVG|Diagram|Markdown|Text)$/,
+      ''
+    ).trim();
+    title = title.replace(/\s*[·•|]\s*\d+\s*lines?$/i, '').trim();
+    return title.slice(0, 120) || 'Artifact';
+  }
+
+  function artifactBlock(card) {
+    const title = artifactTitle(card);
+    const panel = card.__cgxArtifactPanel;
+    const kind = card.getAttribute?.('data-artifact-type') || '';
+
+    if (!panel) {
+      return {
+        type: 'artifact',
+        title,
+        kind,
+        blocks: [{
+          type: 'paragraph',
+          inline: [{
+            type: 'em',
+            children: [{
+              type: 'text',
+              text: 'This artifact could not be opened at export time. Open it in the side panel and export again.'
+            }]
+          }]
+        }]
+      };
+    }
+
+    const panelText = String(panel.textContent || '').trim();
+    const codeText = String(panel.querySelector?.('pre, code')?.textContent || '').trim();
+
+    // Only treat the panel as code when code is the DOMINANT content. A prose
+    // document containing one inline `code` span was being flattened into a
+    // single monospaced blob, which is how a written report came out unreadable.
+    const monoWrapper = panel.querySelector?.(
+      '[class*="font-mono" i], [class*="code-block" i], [class*="cm-content" i]'
+    );
+    const structural = panel.querySelector?.('table, ul, ol, h1, h2, h3, h4');
+    const monoish =
+      panel.id === 'wiggle-file-content' ||
+      Boolean(monoWrapper) ||
+      /font-mono|code-block/i.test(String(panel.getAttribute?.('class') || '')) ||
+      (codeText.length > 0 && panelText.length > 0 && codeText.length / panelText.length > 0.6);
+
+    if (monoish && !structural) {
+      const pre = panel.querySelector('pre');
+      const text = pre ? codeBlockFrom(pre).text : preservedText(monoWrapper || panel);
+      if (text.trim()) {
+        return {
+          type: 'artifact',
+          title,
+          kind: kind || 'code',
+          blocks: [{ type: 'code', lang: artifactLanguage(title, panel), text, diagram: false }]
+        };
+      }
+    }
+
+    let inner = tidy(extractBlocks(panel));
+
+    // The panel rendered but produced no blocks — a virtualised or
+    // canvas-backed view. Fall back to its raw text rather than emitting an
+    // artifact with an empty body.
+    if (!inner.length) {
+      const fallback = preservedText(panel).trim();
+      if (fallback) {
+        inner = fallback.split(/\n{2,}/).map(part => ({
+          type: 'paragraph',
+          inline: [{ type: 'text', text: part.replace(/\n/g, ' ').trim() }]
+        })).filter(block => block.inline[0].text);
+      }
+    }
+
+    return {
+      type: 'artifact',
+      title,
+      kind,
+      blocks: inner.length ? inner : [{
+        type: 'paragraph',
+        inline: [{
+          type: 'em',
+          children: [{
+            type: 'text',
+            text: 'This artifact rendered no readable content. Open it in the side panel and export again.'
+          }]
+        }]
+      }]
+    };
+  }
+
   /**
    * Extracts a whole message body, plus any adapter-provided extras.
    *
@@ -389,28 +585,7 @@
 
     if (extras.includeArtifacts !== false && extras.artifacts?.length) {
       for (const card of extras.artifacts) {
-        const title = normalizeWhitespace(
-          card.getAttribute?.('aria-label') ||
-          card.querySelector?.('[class*="title" i]')?.textContent ||
-          card.textContent || 'Artifact'
-        ).trim().slice(0, 120) || 'Artifact';
-        const panel = card.__cgxArtifactPanel;
-        const inner = panel ? tidy(extractBlocks(panel)) : [];
-        blocks.push({
-          type: 'artifact',
-          title,
-          kind: card.getAttribute?.('data-artifact-type') || '',
-          blocks: inner.length ? inner : [{
-            type: 'paragraph',
-            inline: [{
-              type: 'em',
-              children: [{
-                type: 'text',
-                text: 'Artifact content was not open in the side panel at export time.'
-              }]
-            }]
-          }]
-        });
+        blocks.push(artifactBlock(card));
       }
     }
 
@@ -418,6 +593,9 @@
   }
 
   globalThis.ThreadExporterExtract = Object.freeze({
+    artifactBlock,
+    preservedText,
+    looksLikeCharacterDiagram,
     extractBlocks,
     extractInline,
     inlineNodesFor,

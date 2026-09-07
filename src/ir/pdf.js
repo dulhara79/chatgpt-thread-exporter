@@ -130,16 +130,23 @@
     const longest = Math.max(1, ...text.split('\n').map(line => Array.from(line).length));
 
     if (block.diagram) {
-      const fitted = Math.min(MAX_CODE_FONT, width / (longest * 0.61));
+      // Landscape gives a wide diagram ~1.42x more room before it has to shrink.
+      const landscapeWidth = (pageSize === 'A4' ? 700 : 720);
+      const fittedPortrait = Math.min(MAX_CODE_FONT, width / (longest * 0.61));
+      const useLandscape = fittedPortrait < 7;
+      const fitted = useLandscape
+        ? Math.min(MAX_CODE_FONT, landscapeWidth / (longest * 0.61))
+        : fittedPortrait;
+
       return {
         cgxPreformatted: {
           text,
           diagram: true,
           language: block.lang || '',
+          // 5.5pt was below print legibility; a diagram that still will not fit
+          // is better rotated than shrunk into unreadability.
           fontSize: Math.max(6, fitted),
-          // Below ~7 pt the diagram is unreadable in print, so let the renderer
-          // turn the page instead of shrinking further.
-          landscape: fitted < 7
+          landscape: useLandscape
         },
         margin: [7, 6, 7, 8],
         background: '#F4F6F8'
@@ -257,9 +264,17 @@
           break;
         }
 
-        case 'code':
-          out.push(codeNode(block, pageSize));
+        case 'code': {
+          const node = codeNode(block, pageSize);
+          out.push(node);
+          if (node.cgxPreformatted?.landscape) {
+            // pdfmake applies pageOrientation from that page onward, so the
+            // following node has to switch it back or the rest of the document
+            // stays rotated.
+            out.push({ text: '', pageBreak: 'after', pageOrientation: 'portrait', cgxRestoreOrientation: true });
+          }
           break;
+        }
 
         case 'list':
           out.push(listNode(block, pageSize));

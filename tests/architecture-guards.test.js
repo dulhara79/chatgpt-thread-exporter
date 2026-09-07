@@ -122,6 +122,21 @@ test('the MutationObserver is scoped and excludes style churn', () => {
   assert.ok(!filter.includes("'class'"), 'class attributes churn constantly during streaming');
 });
 
+test('every adapter exposes a flat message list', () => {
+  // Turn grouping is shared in the kit and driven by messages(); an adapter
+  // that only exposes containers cannot pair answers on Claude's DOM.
+  for (const file of ['src/platforms/chatgpt.js', 'src/platforms/claude.js']) {
+    assert.match(readSource(file), /\n    messages\(\) \{/, file + ' must implement messages()');
+  }
+});
+
+test('turn pairing does not assume a shared container', () => {
+  const content = readSource('content.js');
+  assert.ok(content.includes('kit.groupTurns'), 'content.js pairs via the shared grouper');
+  assert.ok(!content.includes('turnsFromContainers'),
+    'container-based pairing dropped answers on Claude');
+});
+
 test('version is consistent across manifest, package and popup', () => {
   const pkg = JSON.parse(readSource('package.json'));
   assert.equal(manifest.version, pkg.version, 'manifest and package.json versions must match');
