@@ -362,20 +362,29 @@
     // artifact/file-ish class/test id must still be considered.
     return Array.from(turn.querySelectorAll('button, [role="button"], a[role="button"]')).filter(element => {
       const label = actionLabel(element);
+      const ancestor = element.closest?.(
+        '[data-testid*="artifact" i], [class*="artifact" i], [class*="preview" i], [class*="document-card" i]'
+      );
       const marker = [
         element.getAttribute?.('data-testid') || '',
         element.getAttribute?.('class') || '',
         element.getAttribute?.('aria-label') || '',
-        element.getAttribute?.('title') || ''
+        element.getAttribute?.('title') || '',
+        ancestor?.getAttribute?.('data-testid') || '',
+        ancestor?.getAttribute?.('class') || ''
       ].join(' ');
-      const hasArtifactSignal = /(artifact|document|react component|\bcode\b|html|svg|markdown|file|preview)/i.test(
+      const hasArtifactSignal = /(artifact|document|react component|\bcode\b|html|svg|markdown|preview)/i.test(
         label + ' ' + marker
       );
       const hasTitleShape =
         label.length >= 4 &&
         label.length <= 220 &&
-        Boolean(element.querySelector?.('svg, [class*="icon" i], [class*="file" i], [class*="document" i]'));
+        Boolean(ancestor) &&
+        Boolean(element.querySelector?.('svg, [class*="icon" i], [class*="document" i], [class*="code" i]'));
+      const isDownloadLike = element.matches?.('a[href], [download]') ||
+        Boolean(element.querySelector?.('a[download], a[href*="/download" i]'));
       return (hasArtifactSignal || hasTitleShape) &&
+        !isDownloadLike &&
         !/copy|retry|feedback|edit|more|share|download/.test(label) &&
         !isClaudeChrome(element);
     });
@@ -655,9 +664,21 @@
       }
 
       if (!panelWasOpen) {
-        const close = document.querySelector(
-          'button[aria-label*="Close" i], button[data-testid="close-artifact"]'
-        );
+        const activePanel = findArtifactPanel();
+        let scope = activePanel;
+        for (let depth = 0; scope?.parentElement && depth < 4; depth++) {
+          const parent = scope.parentElement;
+          const marker = [
+            parent.getAttribute?.('data-testid') || '',
+            parent.getAttribute?.('class') || '',
+            parent.getAttribute?.('aria-label') || ''
+          ].join(' ');
+          scope = parent;
+          if (/artifact|preview/i.test(marker)) break;
+        }
+        const close = scope?.querySelector?.(
+          'button[data-testid="close-artifact"], button[aria-label*="Close artifact" i], button[aria-label="Close"]'
+        ) || document.querySelector('button[data-testid="close-artifact"]');
         try { close?.click(); } catch {}
         await sleep(80);
       }
