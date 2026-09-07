@@ -168,6 +168,10 @@
     return '';
   }
 
+  function parsedProtocol(raw) {
+    try { return new URL(String(raw || ''), location.href).protocol; } catch { return ''; }
+  }
+
   const adapter = defineAdapter({
     id: 'chatgpt',
     label: 'ChatGPT',
@@ -348,7 +352,10 @@
         }
 
         const url = downloadableAttachmentUrl(item);
-        if (!url) continue;
+        if (!url) {
+          item.__cgxAttachmentFailure = 'content-not-exposed';
+          continue;
+        }
 
         try {
           const parsed = new URL(url, location.href);
@@ -396,7 +403,11 @@
           const pre = document.createElement('pre');
           pre.textContent = text;
           item.__cgxAttachmentContent = pre;
-        } catch {}
+          item.__cgxAttachmentFailure = null;
+        } catch (error) {
+          item.__cgxAttachmentFailure =
+            parsedProtocol(url) === 'sandbox:' ? 'sandbox-url-inaccessible' : 'capture-error';
+        }
       }
 
       return items;
