@@ -636,12 +636,18 @@
             lastSignature = signature;
           }
 
-          card.__cgxArtifactPanel = panel && artifactPanelSignature(panel) !== beforeSignature
-            ? snapshotArtifactPanel(panel)
+          const changedPanel = panel && artifactPanelSignature(panel) !== beforeSignature
+            ? panel
             : null;
+          card.__cgxArtifactPanel = changedPanel ? snapshotArtifactPanel(changedPanel) : null;
 
-          if (card.__cgxArtifactPanel) captureDiagnosticsState.captured += 1;
-          else recordCaptureFailure(card, panel ? 'panel-did-not-change' : 'panel-not-found');
+          if (card.__cgxArtifactPanel) {
+            captureDiagnosticsState.captured += 1;
+          } else if (changedPanel?.matches?.('iframe') || changedPanel?.querySelector?.('iframe')) {
+            recordCaptureFailure(card, 'inaccessible-or-empty-iframe');
+          } else {
+            recordCaptureFailure(card, panel ? 'panel-did-not-change' : 'panel-not-found');
+          }
         } catch (error) {
           card.__cgxArtifactPanel = null;
           recordCaptureFailure(card, 'capture-error: ' + String(error?.message || error).slice(0, 100));
