@@ -379,35 +379,76 @@
               item.__cgxAttachmentFailure = 'sandbox-url-inaccessible';
               continue;
             }
-            if (typeof fetch !== 'function') {
-              item.__cgxAttachmentFailure = 'fetch-unavailable';
-              continue;
-            }
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 8000);
-            let response;
-            try {
-              response = await fetch(url, {
-                credentials: parsed.origin === location.origin ? 'include' : 'omit',
-                referrerPolicy: 'no-referrer',
-                signal: controller.signal
-              });
-            } finally {
-              clearTimeout(timer);
-            }
-            if (!response?.ok) continue;
-            const declared = Number(response.headers.get('content-length') || 0);
-            if (declared > 4 * 1024 * 1024) continue;
-            const bytes = new Uint8Array(await response.arrayBuffer());
-            if (!bytes.length || bytes.length > 4 * 1024 * 1024) continue;
-            if (typeof TextDecoder === 'function') {
-              text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+
+            // Content scripts are subject to the page's CORS policy. For safe
+            // OpenAI/CDN URLs already present in the visible file card, ask the
+            // extension service worker to perform the bounded host-permission
+            // fetch after it validates the URL again.
+            if (parsed.origin !== location.origin &&
+                globalThis.chrome?.runtime?.sendMessage &&
+                (
+                  parsed.hostname === 'chatgpt.com' ||
+                  parsed.hostname === 'chat.openai.com' ||
+                  parsed.hostname.endsWith('.oaiusercontent.com') ||
+                  parsed.hostname.endsWith('.oaistatic.com')
+                )) {
+              const worker = await chrome.runtime.sendMessage({
+                type: 'CGX_FETCH_TEXT_ATTACHMENT',
+                url: parsed.href,
+                filename
+              }).catch(() => null);
+              if (!worker?.ok || !String(worker.text || '').trim()) {
+                item.__cgxAttachmentFailure = worker?.error || 'worker-fetch-failed';
+                continue;
+              }
+              text = String(worker.text);
             } else {
-              text = decodeURIComponent(Array.from(bytes)
-                .map(byte => '%' + byte.toString(16).padStart(2, '0'))
-                .join(''));
+              if (typeof fetch !== 'function') {
+                item.__cgxAttachmentFailure = 'fetch-unavailable';
+                continue;
+              }
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 8000);
+              let response;
+              try {
+                response = await fetch(url, {
+                  credentials: parsed.origin === location.origin ? 'include' : 'omit',
+                  referrerPolicy: 'no-referrer',
+                  signal: controller.signal
+                });
+              } finally {
+                clearTimeout(timer);
+              }
+              if (!response?.ok) {
+                item.__cgxAttachmentFailure = 'http-' + (response?.status || 'error');
+                continue;
+              }
+              const declared = Number(response.headers.get('content-length') || 0);
+              if (declared > 4 * 1024 * 1024) {
+                item.__cgxAttachmentFailure = 'attachment-too-large';
+                continue;
+              }
+              const bytes = new Uint8Array(await response.arrayBuffer());
+              if (!bytes.length) {
+                item.__cgxAttachmentFailure = 'attachment-empty';
+                continue;
+              }
+              if (bytes.length > 4 * 1024 * 1024) {
+                item.__cgxAttachmentFailure = 'attachment-too-large';
+                continue;
+              }
+              if (typeof TextDecoder === 'function') {
+                text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+              } else {
+                text = decodeURIComponent(Array.from(bytes)
+                  .map(byte => '%' + byte.toString(16).padStart(2, '0'))
+                  .join(''));
+              }
+              if (!text.trim()) {
+                item.__cgxAttachmentFailure = 'attachment-empty';
+                continue;
+              }
             }
-            if (!text.trim()) continue;
           }
 
           const pre = document.createElement('pre');
