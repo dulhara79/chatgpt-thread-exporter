@@ -176,15 +176,42 @@ try {
       await fixturePage.addScriptTag({ content: source });
     }
 
-    const summary = await fixturePage.evaluate(targetUrl => {
+    const summary = await fixturePage.evaluate(async targetUrl => {
       const adapter = globalThis.ThreadExporterRegistry?.detect(targetUrl);
       if (!adapter) return { error: 'no adapter resolved' };
       const turns = adapter.turnContainers();
+
+      let artifactCapture = null;
+      if (adapter.id === 'claude') {
+        const firstAnswer = adapter.assistantNodes(turns[0])[0];
+        const card = document.createElement('button');
+        card.setAttribute('data-testid', 'artifact-card');
+        card.innerHTML = '<span class="title">Smoke artifact</span><span class="type">Document</span>';
+        firstAnswer.appendChild(card);
+        card.addEventListener('click', () => {
+          if (document.querySelector('[data-testid="artifact-content"]')) return;
+          const panel = document.createElement('aside');
+          panel.className = 'artifact-panel';
+          panel.innerHTML =
+            '<div data-testid="artifact-content"><article class="prose"><h2>Artifact smoke</h2><p>Captured body.</p></article></div>';
+          document.body.appendChild(panel);
+        });
+
+        adapter.resetCaptureDiagnostics?.();
+        const captured = await adapter.captureArtifacts(firstAnswer);
+        artifactCapture = {
+          cards: captured.length,
+          body: captured[0]?.__cgxArtifactPanel?.textContent || '',
+          diagnostics: adapter.captureDiagnostics?.() || null
+        };
+      }
+
       return {
         platform: adapter.id,
         turns: turns.length,
         answers: turns.reduce((sum, turn) => sum + adapter.assistantNodes(turn).length, 0),
         title: adapter.conversationTitle(),
+        artifactCapture,
         misses: globalThis.ThreadExporterAdapterKit.diagnostics.snapshot().misses
       };
     }, url);
@@ -193,6 +220,12 @@ try {
     if (summary.error) throw new Error(name + ': ' + summary.error);
     if (!(summary.turns > 0)) throw new Error(name + ': no turns resolved in real Chrome');
     if (!(summary.answers > 0)) throw new Error(name + ': no assistant messages resolved');
+    if (summary.platform === 'claude') {
+      if (!(summary.artifactCapture?.cards > 0)) throw new Error(name + ': artifact card was not detected');
+      if (!summary.artifactCapture?.body.includes('Captured body.')) {
+        throw new Error(name + ': live artifact body was not captured: ' + JSON.stringify(summary.artifactCapture));
+      }
+    }
     await fixturePage.close();
   }
 } finally {
