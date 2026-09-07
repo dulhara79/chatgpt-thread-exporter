@@ -489,3 +489,129 @@ test('diagram characters route to a font that has their glyphs', () => {
   assert.equal(blocks[0].diagram, true, 'tree characters mark this as a diagram');
   assert.equal(blocks[0].text.split('\n').length, 6, 'line structure is preserved');
 });
+
+
+test('ChatGPT block-row architecture diagrams do not collapse or clip the final row', () => {
+  const page = loadPage(
+    `<html><body><main>
+       <article data-testid="conversation-turn-1">
+         <div data-message-author-role="user"><div class="markdown"><p>Show the architecture.</p></div></div>
+       </article>
+       <article data-testid="conversation-turn-2">
+         <div data-message-author-role="assistant"><div class="markdown">
+           <div class="architecture-diagram">
+             <div>Browser</div>
+             <div>├── displays local 30 FPS camera</div>
+             <div>│</div>
+             <div>└── samples selected frames</div>
+             <div>↓</div>
+             <div>WebSocket</div>
+             <div>↓</div>
+             <div>Recognition backend</div>
+           </div>
+         </div></div>
+       </article>
+     </main></body></html>`,
+    'https://chatgpt.com/c/abc'
+  );
+
+  const assistant = page.adapter.messages().find(message => message.role === 'assistant').node;
+  const blocks = page.extract.fromMessage(page.adapter.messageBody(assistant), {});
+  const diagram = findBlock(blocks, 'code');
+
+  assert.ok(diagram?.diagram, 'the visual row container is recognized as a character diagram');
+  assert.equal(diagram.text.split('\n').length, 8, 'every visual row stays on its own line');
+  assert.ok(diagram.text.endsWith('Recognition backend'), 'the final row must not be clipped');
+});
+
+test('Claude Document artifacts inside wiggle-file-content stay prose, not a mono blob', () => {
+  const page = loadPage(
+    `<html><body>
+       <div data-test-render-count="1">
+         <div data-testid="user-message"><p>Compare the countries.</p></div>
+       </div>
+       <div data-test-render-count="2">
+         <div class="font-claude-response">
+           <button data-testid="artifact-card">
+             <span class="title">Master's in Italy vs Germany for 2027/28</span><span class="type">Document</span>
+           </button>
+         </div>
+       </div>
+       <aside>
+         <div id="wiggle-file-content">
+           <div><strong>Executive summary</strong></div>
+           <div>Germany offers stronger technical career depth.</div>
+           <div>Italy can be the lower-cost option.</div>
+         </div>
+       </aside>
+     </body></html>`,
+    'https://claude.ai/chat/abc'
+  );
+
+  const group = page.window.ThreadExporterAdapterKit.groupTurns(page.adapter.messages())[0];
+  const artifacts = page.adapter.artifacts(group.answers[0]);
+  const artifact = findBlock(
+    page.extract.fromMessage(page.adapter.messageBody(group.answers[0]), { artifacts }),
+    'artifact'
+  );
+
+  const text = page.IR.blocksToPlainText(artifact.blocks);
+  assert.ok(text.includes('Germany offers stronger technical career depth.'));
+  assert.ok(text.includes('Italy can be the lower-cost option.'));
+  assert.equal(findBlock(artifact.blocks, 'code'), null, 'Document artifacts must not use the code renderer');
+});
+
+test('Claude finds artifact content in a generic side-panel layout', () => {
+  const page = loadPage(
+    `<html><body>
+       <div data-test-render-count="1"><div data-testid="user-message"><p>Make a report.</p></div></div>
+       <div data-test-render-count="2"><div class="font-claude-response">
+         <button data-testid="artifact-card" aria-label="Research report Document">Research report<span>Document</span></button>
+       </div></div>
+       <aside class="right-side-artifact-panel">
+         <div data-testid="artifact-renderer"><article class="prose"><h2>Findings</h2><p>Full artifact body.</p></article></div>
+       </aside>
+     </body></html>`,
+    'https://claude.ai/chat/abc'
+  );
+
+  const group = page.window.ThreadExporterAdapterKit.groupTurns(page.adapter.messages())[0];
+  const artifacts = page.adapter.artifacts(group.answers[0]);
+  const artifact = findBlock(
+    page.extract.fromMessage(page.adapter.messageBody(group.answers[0]), { artifacts }),
+    'artifact'
+  );
+
+  assert.ok(page.IR.blocksToPlainText(artifact.blocks).includes('Full artifact body.'));
+});
+
+test('Claude can expand and snapshot a collapsed pasted-question card', async () => {
+  const page = loadPage(
+    `<html><body>
+       <div data-test-render-count="1">
+         <div data-testid="user-message">
+           <button class="rounded-card" aria-label="Pasted content">Pasted content</button>
+         </div>
+       </div>
+       <div data-test-render-count="2"><div class="font-claude-response"><p>Answer.</p></div></div>
+     </body></html>`,
+    'https://claude.ai/chat/abc'
+  );
+
+  const group = page.window.ThreadExporterAdapterKit.groupTurns(page.adapter.messages())[0];
+  const card = page.adapter.attachments(group.question)[0];
+  card.addEventListener('click', () => {
+    if (card.querySelector('pre')) return;
+    const pre = page.document.createElement('pre');
+    pre.textContent = 'first pasted question line\nsecond pasted question line';
+    card.appendChild(pre);
+  });
+
+  const captured = await page.adapter.captureAttachments(group.question);
+  assert.equal(captured.length, 1);
+  assert.ok(captured[0].__cgxAttachmentContent, 'expanded pasted text is snapshotted');
+  assert.ok(
+    page.extract.preservedText(captured[0].__cgxAttachmentContent).includes('second pasted question line'),
+    'the pasted question body is preserved for the question section'
+  );
+});

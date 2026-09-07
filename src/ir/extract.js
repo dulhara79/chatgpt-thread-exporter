@@ -79,14 +79,22 @@
     if (el.tagName.toLowerCase() === 'pre') return false;
     if (el.querySelector('pre, table, ul, ol, img')) return false;
 
-    const text = el.textContent || '';
-    if (!DIAGRAM_CHARS.test(text)) return false;
+    const rawText = el.textContent || '';
+    const layoutText = preservedText(el);
+    if (!DIAGRAM_CHARS.test(rawText) && !DIAGRAM_CHARS.test(layoutText)) return false;
 
+    const lines = layoutText.split('\n').filter(line => line.trim());
+    const signalCount = (layoutText.match(/[┌┐└┘├┤┬┴┼│─━┃┏┓┗┛┣┫┳┻╋╭╮╰╯▼▲►◄→←⇒⇐]/gu) || []).length;
     const preserved = computedWhiteSpace(el).startsWith('pre');
-    const multiline = el.querySelectorAll('br').length >= 2 || /\n\s*\S[\s\S]*\n/.test(text);
-    if (!preserved && !multiline) return false;
+    const explicitBreaks = el.querySelectorAll('br').length >= 2;
 
-    return preservedText(el).split('\n').filter(line => line.trim()).length >= 2;
+    // ChatGPT can render diagram rows as sibling block elements rather than
+    // BR nodes or a white-space:pre container. Reconstruct those visual rows
+    // from the DOM before deciding whether this is preformatted content.
+    const structuralMultiline = lines.length >= 3 && signalCount >= 2;
+    if (!preserved && !explicitBreaks && !structuralMultiline) return false;
+
+    return lines.length >= 2;
   }
 
   function shouldIncludeImage(meta) {
@@ -344,7 +352,27 @@
       // alignment is destroyed by whitespace collapsing.
       if (looksLikeCharacterDiagram(child)) {
         flush();
-        const text = preservedText(child);
+
+        // When the site renders one visual diagram row per child element,
+        // reconstruct from those elements instead of the pretty-printed HTML
+        // whitespace between them. This avoids inventing blank PDF rows while
+        // preserving each row's leading spaces and full text.
+        const rowChildren = Array.from(child.children).filter(element =>
+          ['DIV', 'P', 'SPAN'].includes(element.tagName)
+        );
+        const useStructuralRows =
+          rowChildren.length >= 3 &&
+          rowChildren.length === child.children.length &&
+          !computedWhiteSpace(child).startsWith('pre') &&
+          child.querySelectorAll('br').length < 2;
+
+        const text = useStructuralRows
+          ? rowChildren
+              .map(row => preservedText(row).replace(/[ \t]+$/g, ''))
+              .join('\n')
+              .replace(/\s+$/, '')
+          : preservedText(child);
+
         blocks.push({ type: 'code', lang: '', text, diagram: true });
         continue;
       }
@@ -483,10 +511,22 @@
     return title.slice(0, 120) || 'Artifact';
   }
 
+  function artifactKind(card) {
+    const explicit = [
+      card.getAttribute?.('data-artifact-type') || '',
+      card.getAttribute?.('data-type') || '',
+      card.querySelector?.('[data-testid*="type" i], [class*="type" i], [class*="badge" i]')?.textContent || ''
+    ].join(' ').replace(/\s+/g, ' ').trim();
+
+    const source = explicit || String(card.textContent || '');
+    const match = /(React component|Document|Code|HTML|SVG|Diagram|Markdown|Text)\s*$/i.exec(source);
+    return (match?.[1] || explicit).replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+
   function artifactBlock(card) {
     const title = artifactTitle(card);
     const panel = card.__cgxArtifactPanel;
-    const kind = card.getAttribute?.('data-artifact-type') || '';
+    const kind = artifactKind(card);
 
     if (!panel) {
       return {
@@ -515,12 +555,22 @@
     const monoWrapper = panel.querySelector?.(
       '[class*="font-mono" i], [class*="code-block" i], [class*="cm-content" i]'
     );
-    const structural = panel.querySelector?.('table, ul, ol, h1, h2, h3, h4');
+    const structural = panel.querySelector?.('table, ul, ol, h1, h2, h3, h4, p, article');
+    const documentLike = /document|markdown|text/.test(kind);
+    const codeLike =
+      /code|react component|html|svg/.test(kind) ||
+      /\.(jsx?|tsx?|py|java|rb|go|rs|c|cpp|cs|php|sh|sql|html|css|json|ya?ml|xml)$/i.test(title);
+
+    // The wiggle file container is used for more than source-code artifacts.
+    // Prefer semantic artifact type and strong editor/code evidence so a
+    // Document is never flattened into one monospaced blob.
     const monoish =
-      panel.id === 'wiggle-file-content' ||
-      Boolean(monoWrapper) ||
-      /font-mono|code-block/i.test(String(panel.getAttribute?.('class') || '')) ||
-      (codeText.length > 0 && panelText.length > 0 && codeText.length / panelText.length > 0.6);
+      codeLike ||
+      (!documentLike && (
+        Boolean(monoWrapper) ||
+        /font-mono|code-block|cm-content/i.test(String(panel.getAttribute?.('class') || '')) ||
+        (codeText.length > 0 && panelText.length > 0 && codeText.length / panelText.length > 0.6)
+      ));
 
     if (monoish && !structural) {
       const pre = panel.querySelector('pre');
@@ -543,10 +593,23 @@
     if (!inner.length) {
       const fallback = preservedText(panel).trim();
       if (fallback) {
-        inner = fallback.split(/\n{2,}/).map(part => ({
-          type: 'paragraph',
-          inline: [{ type: 'text', text: part.replace(/\n/g, ' ').trim() }]
-        })).filter(block => block.inline[0].text);
+        const lines = fallback.split('\n').filter(line => line.trim());
+        const diagramSignals = (fallback.match(/[┌┐└┘├┤┬┴┼│─━┃┏┓┗┛┣┫┳┻╋╭╮╰╯▼▲►◄→←⇒⇐]/gu) || []).length;
+
+        if (lines.length >= 3 && diagramSignals >= 2) {
+          inner = [{ type: 'code', lang: '', text: fallback, diagram: true }];
+        } else if (typeof IR.parseBlocks === 'function') {
+          // A virtualized Document may expose only raw readable text. Parse it
+          // instead of collapsing every source line into one prose line.
+          inner = tidy(IR.parseBlocks(fallback));
+        }
+
+        if (!inner.length) {
+          inner = [{
+            type: 'paragraph',
+            inline: [{ type: 'text', text: fallback }]
+          }];
+        }
       }
     }
 

@@ -14,6 +14,7 @@ let browser;
 try {
   browser = await puppeteer.launch({
     headless: false,
+    pipe: true,
     userDataDir,
     enableExtensions: [extensionPath],
     args: ['--no-sandbox', '--disable-dev-shm-usage']
@@ -151,23 +152,32 @@ try {
     '\n'
   );
 
-  // Selector canary: load each committed fixture in real Chrome, run the
-  // adapters against it, and fail if a platform stops resolving turns.
+  // Selector canary: run the real adapter modules against committed fixtures
+  // in real Chrome. Do not depend on content-script injection into an
+  // intercepted chatgpt.com/claude.ai response: recent Chrome builds can
+  // deliberately suppress extension injection for DevTools-synthesized
+  // navigation responses. The extension itself was already exercised above
+  // through its service worker and offscreen PDF document.
+  const adapterSources = [
+    'src/platforms/adapter.js',
+    'src/platforms/chatgpt.js',
+    'src/platforms/claude.js',
+    'src/platforms/registry.js'
+  ].map(file => fs.readFileSync(file, 'utf8'));
+
   for (const [name, url] of [
     ['chatgpt-thread.html', 'https://chatgpt.com/c/smoke'],
     ['claude-thread.html', 'https://claude.ai/chat/smoke']
   ]) {
     const fixtureHtml = fs.readFileSync(path.join('tests', 'fixtures', name), 'utf8');
     const fixturePage = await browser.newPage();
-    await fixturePage.setRequestInterception(true);
-    fixturePage.on('request', request => {
-      if (request.url() === url) request.respond({ contentType: 'text/html', body: fixtureHtml });
-      else request.continue();
-    });
-    await fixturePage.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    await fixturePage.setContent(fixtureHtml, { waitUntil: 'domcontentloaded' });
+    for (const source of adapterSources) {
+      await fixturePage.addScriptTag({ content: source });
+    }
 
-    const summary = await fixturePage.evaluate(() => {
-      const adapter = globalThis.ThreadExporterRegistry?.detect(location.href);
+    const summary = await fixturePage.evaluate(targetUrl => {
+      const adapter = globalThis.ThreadExporterRegistry?.detect(targetUrl);
       if (!adapter) return { error: 'no adapter resolved' };
       const turns = adapter.turnContainers();
       return {
@@ -177,7 +187,7 @@ try {
         title: adapter.conversationTitle(),
         misses: globalThis.ThreadExporterAdapterKit.diagnostics.snapshot().misses
       };
-    });
+    }, url);
 
     process.stdout.write(name + ' -> ' + JSON.stringify(summary) + '\n');
     if (summary.error) throw new Error(name + ': ' + summary.error);
