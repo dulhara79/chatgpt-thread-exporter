@@ -348,11 +348,15 @@
     }
 
     // Last resort: score interactive answer controls instead of requiring the
-    // literal word "artifact". Claude frequently renders title-only artifact
-    // cards, so a visible title button with file/document iconography or an
-    // artifact/file-ish class/test id must still be considered.
+    // literal word "artifact". Claude frequently renders title-only cards.
+    // A candidate needs multiple independent visual/semantic signals so normal
+    // answer controls are not mistaken for artifacts.
     return Array.from(turn.querySelectorAll('button, [role="button"], a[role="button"]')).filter(element => {
       const label = actionLabel(element);
+      if (!label || /copy|retry|feedback|edit|more|share|download|thumb|good response|bad response/.test(label)) {
+        return false;
+      }
+
       const ancestor = element.closest?.(
         '[data-testid*="artifact" i], [class*="artifact" i], [class*="preview" i], [class*="document-card" i]'
       );
@@ -364,20 +368,20 @@
         ancestor?.getAttribute?.('data-testid') || '',
         ancestor?.getAttribute?.('class') || ''
       ].join(' ');
-      const hasArtifactSignal = /(artifact|document|react component|\bcode\b|html|svg|markdown|preview)/i.test(
-        label + ' ' + marker
-      );
-      const hasTitleShape =
-        label.length >= 4 &&
-        label.length <= 220 &&
-        Boolean(ancestor) &&
-        Boolean(element.querySelector?.('svg, [class*="icon" i], [class*="document" i], [class*="code" i]'));
+
+      let score = 0;
+      if (/(artifact|document|react component|\bcode\b|html|svg|markdown|preview)/i.test(label + ' ' + marker)) score += 5;
+      if (ancestor) score += 2;
+      if (/[\w.-]+\.(?:md|txt|py|js|jsx|ts|tsx|html|css|json|svg|csv|sql|java|go|rs|cpp|cs)$/i.test(label)) score += 3;
+      if (/\b(card|rounded|border|shadow|tile|file)\b/i.test(marker)) score += 2;
+      if (element.querySelector?.('svg, [class*="icon" i], [class*="document" i], [class*="code" i], [data-icon]')) score += 1;
+      if (label.length >= 4 && label.length <= 220) score += 1;
+
       const isDownloadLike = element.matches?.('a[href], [download]') ||
         Boolean(element.querySelector?.('a[download], a[href*="/download" i]'));
-      return (hasArtifactSignal || hasTitleShape) &&
-        !isDownloadLike &&
-        !/copy|retry|feedback|edit|more|share|download/.test(label) &&
-        !isClaudeChrome(element);
+      if (isDownloadLike) score -= 5;
+
+      return score >= 4 && !isClaudeChrome(element);
     });
   }
 
@@ -712,6 +716,81 @@
       const items = adapter.attachments(turn);
       if (!items.length) return [];
 
+      const TEXT_LIKE_EXT = /\.(?:md|markdown|mdown|mkd|txt|text|py|js|jsx|ts|tsx|java|rb|go|rs|c|h|cpp|hpp|cs|php|sh|bash|zsh|sql|html?|css|json|ya?ml|xml|toml|ini|cfg|conf|csv|tsv|log|patch|diff)$/i;
+      const MAX_TEXT_BYTES = 4 * 1024 * 1024;
+      const TEXT_FETCH_TIMEOUT_MS = 8000;
+
+      const attachmentName = element => {
+        const link = element.matches?.('a[href]') ? element : element.querySelector?.('a[href]');
+        let hrefName = '';
+        try {
+          const clean = String(link?.getAttribute?.('href') || '').split(/[?#]/)[0];
+          hrefName = decodeURIComponent(clean.split('/').filter(Boolean).pop() || '');
+        } catch {}
+        return compactText(
+          element.getAttribute?.('data-filename') ||
+          element.getAttribute?.('aria-label') ||
+          element.getAttribute?.('download') ||
+          link?.getAttribute?.('download') ||
+          hrefName ||
+          element.textContent || ''
+        );
+      };
+
+      const attachmentHref = element => {
+        const link = element.matches?.('a[href]') ? element : element.querySelector?.('a[href]');
+        return String(
+          link?.getAttribute?.('href') ||
+          element.getAttribute?.('data-download-url') ||
+          element.getAttribute?.('data-file-url') ||
+          ''
+        ).trim();
+      };
+
+      const textFromUrl = async href => {
+        if (!href) return '';
+
+        if (/^data:text\//i.test(href)) {
+          const comma = href.indexOf(',');
+          if (comma < 0) return '';
+          const meta = href.slice(0, comma);
+          const payload = href.slice(comma + 1);
+          try {
+            const text = /;base64/i.test(meta) ? atob(payload) : decodeURIComponent(payload);
+            return new TextEncoder().encode(text).length <= MAX_TEXT_BYTES ? text : '';
+          } catch {
+            return '';
+          }
+        }
+
+        let url;
+        try { url = new URL(href, location.href); } catch { return ''; }
+        if (!/^https?:$/.test(url.protocol)) return '';
+        if (url.origin !== location.origin) return '';
+        if (typeof fetch !== 'function') return '';
+
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), TEXT_FETCH_TIMEOUT_MS);
+        try {
+          const response = await fetch(url.href, {
+            credentials: 'include',
+            referrerPolicy: 'same-origin',
+            signal: controller.signal
+          });
+          if (!response.ok) return '';
+          const declared = Number(response.headers.get('content-length') || 0);
+          if (declared > MAX_TEXT_BYTES) return '';
+          const type = String(response.headers.get('content-type') || '').toLowerCase();
+          if (type && !/(^text\/|json|javascript|xml|yaml|markdown|csv)/i.test(type)) return '';
+          const text = await response.text();
+          return new TextEncoder().encode(text).length <= MAX_TEXT_BYTES ? text : '';
+        } catch {
+          return '';
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+
       const readableNode = element => {
         if (!(element instanceof Element)) return null;
         const candidates = Array.from(element.querySelectorAll([
@@ -752,13 +831,30 @@
           item.getAttribute?.('class') || ''
         ].join(' ');
 
-        if (!/paste|pasted|text attachment|attached text/i.test(marker)) continue;
+        const name = attachmentName(item);
+        const isPasted = /paste|pasted|text attachment|attached text/i.test(marker);
+        const isTextFile = TEXT_LIKE_EXT.test(name);
 
         let body = readableNode(item);
         if (body) {
           item.__cgxAttachmentContent = body.cloneNode(true);
           continue;
         }
+
+        // Normal file cards do not necessarily expand like pasted-content
+        // cards. If Claude exposes an accessible same-origin/data URL, capture
+        // the text directly while the message is still mounted.
+        if (isTextFile) {
+          const text = await textFromUrl(attachmentHref(item));
+          if (text) {
+            const pre = document.createElement('pre');
+            pre.textContent = text;
+            item.__cgxAttachmentContent = pre;
+            continue;
+          }
+        }
+
+        if (!isPasted) continue;
 
         const clickable = item.matches('button, [role="button"], summary')
           ? item
