@@ -747,6 +747,12 @@
         ).trim();
       };
 
+      const utf8Length = value => {
+        const text = String(value || '');
+        if (typeof TextEncoder === 'function') return new TextEncoder().encode(text).length;
+        try { return unescape(encodeURIComponent(text)).length; } catch { return text.length * 3; }
+      };
+
       const textFromUrl = async href => {
         if (!href) return '';
 
@@ -757,7 +763,7 @@
           const payload = href.slice(comma + 1);
           try {
             const text = /;base64/i.test(meta) ? atob(payload) : decodeURIComponent(payload);
-            return new TextEncoder().encode(text).length <= MAX_TEXT_BYTES ? text : '';
+            return utf8Length(text) <= MAX_TEXT_BYTES ? text : '';
           } catch {
             return '';
           }
@@ -783,7 +789,7 @@
           const type = String(response.headers.get('content-type') || '').toLowerCase();
           if (type && !/(^text\/|json|javascript|xml|yaml|markdown|csv)/i.test(type)) return '';
           const text = await response.text();
-          return new TextEncoder().encode(text).length <= MAX_TEXT_BYTES ? text : '';
+          return utf8Length(text) <= MAX_TEXT_BYTES ? text : '';
         } catch {
           return '';
         } finally {
