@@ -105,6 +105,15 @@
     const questionNode = group.question;
     const answerNodes = group.answers || [];
 
+    let capturedAttachments = null;
+    if (questionNode && typeof adapter.captureAttachments === 'function') {
+      try {
+        capturedAttachments = await adapter.captureAttachments(questionNode);
+      } catch {
+        capturedAttachments = null;
+      }
+    }
+
     let question = questionNode ? await messageFrom(questionNode, 'user') : null;
 
     // A pasted block or attachment card sits outside the message body, so the
@@ -124,14 +133,18 @@
     // Attachments and pasted files sit outside the message body.
     if (questionNode) {
       const existing = question ? question.text : '';
-      const extras = attachmentBlocks(questionNode).filter(block => {
+      const extras = attachmentBlocks(questionNode, capturedAttachments).filter(block => {
         // Skip anything the question body already contains verbatim.
         const text = IR.blocksToPlainText([block]).trim();
         return text && !(text.length > 24 && existing.includes(text));
       });
       if (extras.length) {
-        if (question) question.blocks = question.blocks.concat(extras);
-        else question = { role: 'user', blocks: extras, text: IR.blocksToPlainText(extras) };
+        if (question) {
+          question.blocks = question.blocks.concat(extras);
+          question.text = IR.blocksToPlainText(question.blocks);
+        } else {
+          question = { role: 'user', blocks: extras, text: IR.blocksToPlainText(extras) };
+        }
       }
     }
 
@@ -165,21 +178,37 @@
    * Archives and binaries do not — their bytes are never in the page — so they
    * are recorded by name instead of being silently dropped or half-rendered.
    */
-  function attachmentBlocks(node) {
+  function attachmentBlocks(node, captured = null) {
     const blocks = [];
     const seen = new Set();
+    const elements = Array.isArray(captured) ? captured : (adapter.attachments(node) || []);
 
-    for (const element of adapter.attachments(node) || []) {
-      const name = String(
+    for (const element of elements) {
+      const descriptor = [
+        element.getAttribute?.('data-filename') || '',
+        element.getAttribute?.('aria-label') || '',
+        element.getAttribute?.('title') || '',
+        element.getAttribute?.('data-testid') || '',
+        element.getAttribute?.('class') || ''
+      ].join(' ').replace(/\s+/g, ' ').trim();
+      const pasted = /paste|pasted/i.test(descriptor);
+
+      const explicitName = String(
         element.getAttribute?.('data-filename') ||
         element.getAttribute?.('aria-label') ||
         element.querySelector?.('[class*="name" i], [class*="title" i]')?.textContent ||
-        element.textContent || ''
-      ).replace(/\s+/g, ' ').trim().slice(0, 120);
+        ''
+      ).replace(/\s+/g, ' ').trim();
+
+      const fallbackName = pasted
+        ? 'Pasted content'
+        : String(element.textContent || '').replace(/\s+/g, ' ').trim();
+      const name = (explicitName || fallbackName).slice(0, 120);
       if (!name || seen.has(name)) continue;
       seen.add(name);
 
-      const filename = (name.match(/[\w.-]+\.[A-Za-z0-9]{1,8}/) || [name])[0];
+      const filenameMatch = name.match(/[\w.-]+\.[A-Za-z0-9]{1,8}/);
+      const filename = filenameMatch?.[0] || (pasted ? 'Pasted content' : name);
 
       if (ARCHIVE_EXT.test(filename)) {
         // The archive's bytes are not in the page; the extension cannot open
@@ -194,18 +223,28 @@
         continue;
       }
 
-      const pre = element.querySelector?.('pre');
-      const body = pre ? pre : element.querySelector?.('[class*="font-mono" i], [class*="content" i]');
-      const text = body ? extractor.preservedText(body) : '';
+      const snapshot = element.__cgxAttachmentContent || null;
+      const root = snapshot || element;
+      const pre = root.matches?.('pre') ? root : root.querySelector?.('pre');
+      const body = pre ||
+        (root.matches?.('textarea, [class*="font-mono" i], [class*="content" i], [class*="whitespace-pre" i]') ? root : null) ||
+        root.querySelector?.('textarea, [class*="font-mono" i], [class*="content" i], [class*="whitespace-pre" i]');
+      const text = body
+        ? String(body.value || extractor.preservedText(body) || '')
+        : '';
 
       if (text.trim()) {
-        const lang = (filename.match(/\.([A-Za-z0-9]+)$/) || [, ''])[1].toLowerCase();
-        blocks.push({ type: 'heading', level: 4, inline: [{ type: 'text', text: 'Attachment: ' + filename }] });
-        blocks.push({ type: 'code', lang, text, diagram: false });
+        const lang = pasted
+          ? ''
+          : (filename.match(/\.([A-Za-z0-9]+)$/) || [, ''])[1].toLowerCase();
+        const heading = pasted ? 'Pasted content' : 'Attachment: ' + filename;
+        blocks.push({ type: 'heading', level: 4, inline: [{ type: 'text', text: heading }] });
+        blocks.push({ type: 'code', lang, text: text.replace(/\s+$/, ''), diagram: false });
       } else {
+        const label = pasted ? 'Pasted content' : 'Attachment: ' + filename;
         blocks.push({
           type: 'paragraph',
-          inline: [{ type: 'em', children: [{ type: 'text', text: 'Attachment: ' + filename }] }]
+          inline: [{ type: 'em', children: [{ type: 'text', text: label }] }]
         });
       }
     }
