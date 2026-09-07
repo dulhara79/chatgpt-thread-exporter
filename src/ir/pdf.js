@@ -45,8 +45,32 @@
     return 'latin';
   }
 
+  function scalarFallback(char) {
+    const cp = char.codePointAt(0);
+
+    // Unicode permanently reserves these noncharacters. No bundled font should
+    // be expected to contain them, and passing them to pdfmake produces an
+    // empty square. Preserve the information as readable text instead.
+    const noncharacter =
+      (cp >= 0xFDD0 && cp <= 0xFDEF) ||
+      (cp & 0xFFFF) === 0xFFFE ||
+      (cp & 0xFFFF) === 0xFFFF;
+
+    // The bundled monochrome emoji font predates the newest tail additions in
+    // the Extended-A face/gesture ranges on some installations. Falling back
+    // for those scalars is preferable to a silent tofu box. Common emoji such
+    // as 😀 remain real emoji runs.
+    const newestEmojiTail =
+      (cp >= 0x1FAE9 && cp <= 0x1FAEF) ||
+      (cp >= 0x1FAF9 && cp <= 0x1FAFF);
+
+    return noncharacter || newestEmojiTail
+      ? '[U+' + cp.toString(16).toUpperCase() + ']'
+      : char;
+  }
+
   function pdfSafeText(text) {
-    return String(text || '')
+    const cleaned = String(text || '')
       .replace(/\u0000/g, '')
       .replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '')
       // pdfmake can render a missing-glyph rectangle for variation selectors
@@ -55,6 +79,8 @@
       // complex ZWJ sequence therefore degrades to adjacent emoji rather than
       // showing a blank square in the exported PDF.
       .replace(/[\u200D\uFE0E\uFE0F]/g, '');
+
+    return Array.from(cleaned).map(scalarFallback).join('');
   }
 
   function splitFontRuns(text, base = {}) {
