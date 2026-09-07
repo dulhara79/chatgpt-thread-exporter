@@ -1,6 +1,6 @@
 {
   "name": "ai-thread-exporter",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "private": true,
   "description": "Export ChatGPT and Claude conversations to professional PDF, Word and Markdown documents.",
   "scripts": {
