@@ -95,6 +95,7 @@
     'a[download]',
     'a[href^="blob:"]',
     'a[href^="sandbox:"]',
+    'a[href^="data:text/"]',
     'a[href*="oaiusercontent.com"]',
     'a[href*="oaistatic.com"]',
     'a[href*="/files/"]',
@@ -152,6 +153,7 @@
       try {
         const url = new URL(raw, location.href);
         if (url.protocol === 'blob:' || url.protocol === 'sandbox:') return url.href;
+        if (url.protocol === 'data:' && /^data:text\//i.test(raw)) return raw;
         if (url.protocol !== 'https:' && url.protocol !== 'http:') continue;
         const host = url.hostname.toLowerCase();
         if (
@@ -350,18 +352,47 @@
 
         try {
           const parsed = new URL(url, location.href);
-          const response = await fetch(url, {
-            credentials: parsed.origin === location.origin ? 'include' : 'omit',
-            referrerPolicy: 'no-referrer'
-          });
-          if (!response.ok) continue;
-          const declared = Number(response.headers.get('content-length') || 0);
-          if (declared > 4 * 1024 * 1024) continue;
-          const bytes = new Uint8Array(await response.arrayBuffer());
-          if (!bytes.length || bytes.length > 4 * 1024 * 1024) continue;
+          let text = '';
 
-          const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-          if (!text.trim()) continue;
+          if (parsed.protocol === 'data:' && /^data:text\//i.test(url)) {
+            const comma = url.indexOf(',');
+            if (comma < 0) continue;
+            const meta = url.slice(0, comma);
+            const payload = url.slice(comma + 1);
+            text = /;base64/i.test(meta) ? atob(payload) : decodeURIComponent(payload);
+            const byteLength = typeof TextEncoder === 'function'
+              ? new TextEncoder().encode(text).length
+              : unescape(encodeURIComponent(text)).length;
+            if (!text.trim() || byteLength > 4 * 1024 * 1024) continue;
+          } else {
+            if (typeof fetch !== 'function') continue;
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 8000);
+            let response;
+            try {
+              response = await fetch(url, {
+                credentials: parsed.origin === location.origin ? 'include' : 'omit',
+                referrerPolicy: 'no-referrer',
+                signal: controller.signal
+              });
+            } finally {
+              clearTimeout(timer);
+            }
+            if (!response?.ok) continue;
+            const declared = Number(response.headers.get('content-length') || 0);
+            if (declared > 4 * 1024 * 1024) continue;
+            const bytes = new Uint8Array(await response.arrayBuffer());
+            if (!bytes.length || bytes.length > 4 * 1024 * 1024) continue;
+            if (typeof TextDecoder === 'function') {
+              text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+            } else {
+              text = decodeURIComponent(Array.from(bytes)
+                .map(byte => '%' + byte.toString(16).padStart(2, '0'))
+                .join(''));
+            }
+            if (!text.trim()) continue;
+          }
+
           const pre = document.createElement('pre');
           pre.textContent = text;
           item.__cgxAttachmentContent = pre;
