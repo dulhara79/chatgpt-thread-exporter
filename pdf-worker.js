@@ -76,7 +76,13 @@
     const runs = [];
     let current = null;
     for (const char of Array.from(String(line))) {
-      const key = preformattedFontKey(char.codePointAt(0));
+      const cp = char.codePointAt(0);
+      // Variation selectors and ZWJ are shaping controls. pdfmake sometimes
+      // asks the selected font to draw them as visible glyphs, producing tofu
+      // squares. Preserve the surrounding base emoji/symbols and omit only the
+      // default-ignorable controls from the PDF glyph stream.
+      if (cp === 0x200D || cp === 0xFE0E || cp === 0xFE0F) continue;
+      const key = preformattedFontKey(cp);
       if (current && current.__key === key) current.text += char;
       else {
         current = { text: char, font: FONT_NAMES[key] || 'NotoMono', __key: key };
