@@ -116,3 +116,36 @@ test('PDF keeps source code exact and lets long questions paginate', () => {
   assert.ok(question);
   assert.notEqual(question.unbreakable, true);
 });
+
+
+test('ChatGPT captures an assistant-generated Markdown file from an accessible data URL', async () => {
+  const page = loadPage(
+    `<html><body><main>
+      <article data-testid="conversation-turn-1">
+        <div data-message-author-role="user"><div class="markdown"><p>Create report.</p></div></div>
+      </article>
+      <article data-testid="conversation-turn-2">
+        <div data-message-author-role="assistant"><div class="markdown">
+          <p>Done.</p>
+          <div class="file-card">
+            <a download="full-report.md"
+               href="data:text/markdown,%23%20Full%20Report%0A%0A-%20finding%0A%0A%60%60%60js%0Aconsole.log(%22ok%22)%0A%60%60%60">
+              full-report.md
+            </a>
+          </div>
+        </div></div>
+      </article>
+    </main></body></html>`,
+    'https://chatgpt.com/c/generated-md-data'
+  );
+
+  const assistant = page.adapter.messages().find(message => message.role === 'assistant').node;
+  const items = page.adapter.attachments(assistant);
+  assert.equal(items.length, 1, 'generated Markdown link is discovered');
+
+  const captured = await page.adapter.captureAttachments(assistant);
+  assert.ok(captured[0].__cgxAttachmentContent, 'generated Markdown body is snapshotted');
+  const text = page.extract.preservedText(captured[0].__cgxAttachmentContent);
+  assert.ok(text.includes('# Full Report'));
+  assert.ok(text.includes('console.log("ok")'));
+});
