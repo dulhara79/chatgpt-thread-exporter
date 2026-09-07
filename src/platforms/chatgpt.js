@@ -254,10 +254,10 @@
       if (messageId) return 'message:' + messageId;
       const testId = owner.getAttribute?.('data-testid');
       if (testId) return 'testid:' + testId;
+      const role = node.getAttribute('data-message-author-role') ||
+        (node.querySelector(USER_SELECTOR) ? 'user' : 'assistant');
       const ownerText = String(node.innerText || '');
-      const prevText = String(owner.previousElementSibling?.innerText || '').slice(-240);
-      const nextText = String(owner.nextElementSibling?.innerText || '').slice(0, 240);
-      const seed = [ownerText, prevText, nextText].join('\u241E');
+      const seed = role + '\u241E' + ownerText;
       return 'hash:' + contentHash(seed) + '-' +
         contentHash(Array.from(seed).reverse().join('')) + '-' + seed.length;
     },
