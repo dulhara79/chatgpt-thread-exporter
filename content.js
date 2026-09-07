@@ -345,10 +345,32 @@
         }
       } else {
         const label = pasted ? 'Pasted content' : 'Attachment: ' + filename;
-        blocks.push({
-          type: 'paragraph',
-          inline: [{ type: 'em', children: [{ type: 'text', text: label }] }]
-        });
+        const failure = String(element.__cgxAttachmentFailure || '').trim();
+
+        if (failure && !pasted) {
+          blocks.push({
+            type: 'heading',
+            level: 4,
+            inline: [{ type: 'text', text: label }]
+          });
+          blocks.push({
+            type: 'paragraph',
+            inline: [{
+              type: 'em',
+              children: [{
+                type: 'text',
+                text: 'This text attachment could not be read during export (' +
+                  failure.replace(/[-_]+/g, ' ') +
+                  '). The file reference is preserved here rather than silently dropping it.'
+              }]
+            }]
+          });
+        } else {
+          blocks.push({
+            type: 'paragraph',
+            inline: [{ type: 'em', children: [{ type: 'text', text: label }] }]
+          });
+        }
       }
     }
 
