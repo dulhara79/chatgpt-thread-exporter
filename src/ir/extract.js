@@ -352,10 +352,27 @@
       // alignment is destroyed by whitespace collapsing.
       if (looksLikeCharacterDiagram(child)) {
         flush();
-        // Nested block rows can contribute both their own newline and the
-        // wrapper newline. Collapse only empty separator rows here; source
-        // characters, indentation and meaningful lines remain byte-for-byte.
-        const text = preservedText(child).replace(/\n[ \t]*\n/g, '\n');
+
+        // When the site renders one visual diagram row per child element,
+        // reconstruct from those elements instead of the pretty-printed HTML
+        // whitespace between them. This avoids inventing blank PDF rows while
+        // preserving each row's leading spaces and full text.
+        const rowChildren = Array.from(child.children).filter(element =>
+          ['DIV', 'P', 'SPAN'].includes(element.tagName)
+        );
+        const useStructuralRows =
+          rowChildren.length >= 3 &&
+          rowChildren.length === child.children.length &&
+          !computedWhiteSpace(child).startsWith('pre') &&
+          child.querySelectorAll('br').length < 2;
+
+        const text = useStructuralRows
+          ? rowChildren
+              .map(row => preservedText(row).replace(/[ \t]+$/g, ''))
+              .join('\n')
+              .replace(/\s+$/, '')
+          : preservedText(child);
+
         blocks.push({ type: 'code', lang: '', text, diagram: true });
         continue;
       }
