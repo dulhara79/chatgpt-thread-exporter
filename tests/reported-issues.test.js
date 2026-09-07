@@ -6,7 +6,7 @@
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadPage, loadPure, fixture, findNode, findAll, plain } = require('./helpers/harness.js');
+const { loadPage, loadPure, fixture, findNode, findAll, plain, readSource } = require('./helpers/harness.js');
 
 const { IR, MD, exporter } = loadPure();
 
@@ -614,4 +614,116 @@ test('Claude can expand and snapshot a collapsed pasted-question card', async ()
     page.extract.preservedText(captured[0].__cgxAttachmentContent).includes('second pasted question line'),
     'the pasted question body is preserved for the question section'
   );
+});
+
+
+test('Claude sidebar chrome is never exported as artifact content', () => {
+  const page = loadPage(
+    `<html><body>
+       <nav aria-label="Sidebar">
+         <div>Claude</div><div>New</div><div>Projects</div><div>Artifacts</div>
+         <div>Scheduled</div><div>Customize</div><div>Pinned</div>
+         <div>Chats and tasks</div><div>View all conversations</div>
+         <a href="/chat/1">Old conversation</a><a href="/chat/2">Another conversation</a>
+       </nav>
+       <div data-test-render-count="1"><div data-testid="user-message"><p>Build the report.</p></div></div>
+       <div data-test-render-count="2"><div class="font-claude-response">
+         <button data-testid="artifact-card" aria-label="Research report Document">Research report<span>Document</span></button>
+       </div></div>
+     </body></html>`,
+    'https://claude.ai/chat/abc'
+  );
+
+  const group = page.window.ThreadExporterAdapterKit.groupTurns(page.adapter.messages())[0];
+  const artifacts = page.adapter.artifacts(group.answers[0]);
+  assert.equal(artifacts.length, 1);
+  assert.equal(artifacts[0].__cgxArtifactPanel, null, 'navigation chrome must not be accepted as an artifact panel');
+
+  const artifact = findBlock(
+    page.extract.fromMessage(page.adapter.messageBody(group.answers[0]), { artifacts }),
+    'artifact'
+  );
+  const text = page.IR.blocksToPlainText(artifact.blocks);
+  assert.ok(!text.includes('Chats and tasks'));
+  assert.ok(!text.includes('View all conversations'));
+  assert.match(text, /could not be opened/i);
+});
+
+test('Claude chooses verified artifact content instead of the sidebar', () => {
+  const page = loadPage(
+    `<html><body>
+       <aside class="left-sidebar">
+         <nav role="navigation">
+           <div>Claude</div><div>New</div><div>Projects</div><div>Artifacts</div>
+           <div>Scheduled</div><div>Customize</div><div>Pinned</div>
+           <div>Chats and tasks</div><div>View all conversations</div>
+         </nav>
+       </aside>
+       <div data-test-render-count="1"><div data-testid="user-message"><p>Build it.</p></div></div>
+       <div data-test-render-count="2"><div class="font-claude-response">
+         <button data-testid="artifact-card"><span class="title">Plan</span><span class="type">Document</span></button>
+       </div></div>
+       <aside class="artifact-panel">
+         <div data-testid="artifact-content">
+           <article class="prose"><h2>Actual artifact</h2><p>Only this content belongs in the export.</p></article>
+         </div>
+       </aside>
+     </body></html>`,
+    'https://claude.ai/chat/abc'
+  );
+
+  const group = page.window.ThreadExporterAdapterKit.groupTurns(page.adapter.messages())[0];
+  const artifacts = page.adapter.artifacts(group.answers[0]);
+  const artifact = findBlock(
+    page.extract.fromMessage(page.adapter.messageBody(group.answers[0]), { artifacts }),
+    'artifact'
+  );
+  const text = page.IR.blocksToPlainText(artifact.blocks);
+
+  assert.ok(text.includes('Actual artifact'));
+  assert.ok(text.includes('Only this content belongs in the export.'));
+  assert.ok(!text.includes('Chats and tasks'));
+  assert.ok(!text.includes('View all conversations'));
+});
+
+test('artifact control bytes are stripped before PDF rendering', () => {
+  const page = loadPage(
+    `<html><body>
+       <div data-test-render-count="1"><div data-testid="user-message"><p>Q</p></div></div>
+       <div data-test-render-count="2"><div class="font-claude-response">
+         <button data-testid="artifact-card"><span class="title">Report</span><span class="type">Document</span></button>
+       </div></div>
+       <aside class="artifact-panel"><div data-testid="artifact-content"><p id="body"></p></div></aside>
+     </body></html>`,
+    'https://claude.ai/chat/abc'
+  );
+  page.document.querySelector('#body').textContent = 'Valid text\u0000 \u0001 \u0007 after controls';
+
+  const group = page.window.ThreadExporterAdapterKit.groupTurns(page.adapter.messages())[0];
+  const artifacts = page.adapter.artifacts(group.answers[0]);
+  const blocks = page.extract.fromMessage(page.adapter.messageBody(group.answers[0]), { artifacts });
+  const plainText = page.IR.blocksToPlainText(blocks);
+
+  assert.equal(plainText.includes('\u0000'), false);
+  assert.equal(plainText.includes('\u0001'), false);
+  assert.ok(plainText.includes('Valid text'));
+  assert.ok(plainText.includes('after controls'));
+
+  const definition = page.exporter.buildPdfDefinition(
+    { title: 'T', platformLabel: 'Claude' },
+    [{ index: 0, question: { blocks: [] }, answers: [{ blocks: plain(blocks) }] }]
+  );
+  const raw = JSON.stringify(definition);
+  assert.equal(raw.includes('\\u0000'), false, 'NUL must never reach pdfmake');
+  assert.equal(raw.includes('\\u0001'), false, 'C0 controls must never reach pdfmake');
+});
+
+test('attachment policy renders Markdown and labels archive bundles explicitly', () => {
+  const source = readSource('content.js');
+  assert.match(source, /MARKDOWN_EXT/);
+  assert.match(source, /IR\.parseBlocks\(text\)/, 'Markdown file bodies must be rendered as Markdown');
+  assert.match(source, /BUNDLE_EXT/);
+  assert.match(source, /Attachment bundle:/);
+  assert.match(source, /internal files are not available/i);
+  assert.match(source, /attachmentLanguage\(filename\)/, 'source files keep language-aware code formatting');
 });

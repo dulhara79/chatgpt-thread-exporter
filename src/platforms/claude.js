@@ -78,14 +78,28 @@
     }
   ];
 
-  const ARTIFACT_CANDIDATES = [
+  const ARTIFACT_CONTENT_SELECTOR = [
     '#markdown-artifact',
     '#wiggle-file-content',
     '[data-testid="artifact-content"]',
     '[data-testid="artifact-preview"]',
     '[data-testid="artifact-renderer"]',
-    '[data-testid="artifact-viewer"]',
-    () => document.querySelector('div.h-full.top-0 div.font-mono') || null
+    '[data-testid="artifact-viewer"]'
+  ].join(', ');
+
+  const ARTIFACT_PANEL_SELECTOR = [
+    ARTIFACT_CONTENT_SELECTOR,
+    'iframe[title*="artifact" i]',
+    'iframe[title*="preview" i]',
+    '[data-testid*="artifact" i]',
+    '[class*="artifact-panel" i]',
+    '[class*="artifact-view" i]',
+    '[class*="artifact-preview" i]'
+  ].join(', ');
+
+  const CLAUDE_CHROME_PHRASES = [
+    'new', 'projects', 'artifacts', 'scheduled', 'customize',
+    'pinned', 'chats and tasks', 'view all conversations'
   ];
 
   function inConversationFlow(element) {
@@ -94,54 +108,170 @@
     ));
   }
 
-  function panelText(panel) {
-    if (!(panel instanceof Element)) return '';
-    if (panel.tagName?.toLowerCase() === 'iframe') {
-      try {
-        const body = panel.contentDocument?.body;
-        return String(body?.innerText || body?.textContent || '');
-      } catch {
-        return '';
-      }
-    }
-    return String(panel.innerText || panel.textContent || '');
+  function compactText(value) {
+    return String(value || '')
+      .replace(/\u0000/g, '')
+      .replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '')
+      .replace(/\u00a0/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
-  function snapshotArtifactPanel(panel) {
-    if (!(panel instanceof Element)) return null;
-    if (panel.tagName?.toLowerCase() === 'iframe') {
+  function panelText(panel) {
+    if (!(panel instanceof Element)) return '';
+
+    const parts = [];
+    const own = panel.innerText || panel.textContent || '';
+    if (own) parts.push(own);
+
+    const frames = panel.matches('iframe') ? [panel] : Array.from(panel.querySelectorAll('iframe'));
+    for (const frame of frames) {
       try {
-        const body = panel.contentDocument?.body;
-        return body ? document.importNode(body, true) : null;
+        const body = frame.contentDocument?.body;
+        const text = body?.innerText || body?.textContent || '';
+        if (text) parts.push(text);
+      } catch {}
+    }
+
+    return compactText(parts.join('\n'));
+  }
+
+  function isClaudeChrome(element) {
+    if (!(element instanceof Element)) return true;
+    if (element.matches('nav, [role="navigation"]') || element.closest('nav, [role="navigation"]')) return true;
+
+    const marker = [
+      element.id || '',
+      element.getAttribute?.('data-testid') || '',
+      element.getAttribute?.('aria-label') || '',
+      element.getAttribute?.('class') || ''
+    ].join(' ').toLowerCase();
+
+    if (/sidebar|navigation|chat-list|conversation-list|left-rail/.test(marker)) return true;
+
+    const text = compactText(element.innerText || element.textContent || '').toLowerCase();
+    const chromeHits = CLAUDE_CHROME_PHRASES.filter(phrase => text.includes(phrase)).length;
+    if (chromeHits >= 4) return true;
+
+    const links = element.querySelectorAll?.('a[href]')?.length || 0;
+    const rich = Boolean(element.querySelector?.(
+      'pre, code, article, [class*="prose" i], table, canvas, svg, iframe'
+    ));
+    return links >= 8 && !rich;
+  }
+
+  function isVerifiedArtifactPanel(element) {
+    if (!(element instanceof Element) || !present(element) || inConversationFlow(element) || isClaudeChrome(element)) {
+      return false;
+    }
+
+    if (element.matches(ARTIFACT_CONTENT_SELECTOR)) return true;
+    if (element.matches('iframe[title*="artifact" i], iframe[title*="preview" i]')) return true;
+
+    const marker = [
+      element.id || '',
+      element.getAttribute?.('data-testid') || '',
+      element.getAttribute?.('aria-label') || '',
+      element.getAttribute?.('title') || '',
+      element.getAttribute?.('class') || ''
+    ].join(' ').toLowerCase();
+
+    if (!/artifact|preview/.test(marker)) return false;
+
+    return Boolean(
+      panelText(element) ||
+      element.querySelector?.('pre, code, article, [class*="prose" i], table, canvas, svg, iframe')
+    );
+  }
+
+  function artifactContentRoot(panel) {
+    if (!(panel instanceof Element)) return null;
+    if (panel.matches(ARTIFACT_CONTENT_SELECTOR + ', iframe[title*="artifact" i], iframe[title*="preview" i]')) {
+      return panel;
+    }
+
+    const inner = Array.from(panel.querySelectorAll(
+      ARTIFACT_CONTENT_SELECTOR +
+      ', iframe[title*="artifact" i], iframe[title*="preview" i], article[class*="prose" i], [class*="prose" i], pre, [class*="cm-content" i]'
+    )).filter(candidate => !isClaudeChrome(candidate));
+
+    inner.sort((a, b) => {
+      const score = element =>
+        (element.matches(ARTIFACT_CONTENT_SELECTOR) ? 5000 : 0) +
+        (element.matches('iframe') ? 4000 : 0) +
+        Math.min(3000, panelText(element).length);
+      return score(b) - score(a);
+    });
+    return inner[0] || panel;
+  }
+
+  function cloneArtifactNode(node) {
+    if (!node) return null;
+    if (node.nodeType === Node.TEXT_NODE) return document.createTextNode(node.nodeValue || '');
+    if (node.nodeType !== Node.ELEMENT_NODE) return null;
+
+    const tag = node.tagName.toLowerCase();
+
+    if (tag === 'iframe') {
+      try {
+        const body = node.contentDocument?.body;
+        if (!body) return null;
+        const wrapper = document.createElement('div');
+        wrapper.setAttribute('data-cgx-iframe-content', 'true');
+        for (const child of Array.from(body.childNodes)) {
+          const cloned = cloneArtifactNode(child);
+          if (cloned) wrapper.appendChild(cloned);
+        }
+        return wrapper;
       } catch {
         return null;
       }
     }
-    return panel.cloneNode(true);
+
+    if (tag === 'canvas') {
+      try {
+        const img = document.createElement('img');
+        img.src = node.toDataURL('image/png');
+        img.alt = node.getAttribute('aria-label') || 'Artifact preview';
+        img.width = node.width || 0;
+        img.height = node.height || 0;
+        return img;
+      } catch {
+        return null;
+      }
+    }
+
+    const clone = node.cloneNode(false);
+    if (tag === 'textarea') clone.textContent = node.value || '';
+
+    const sourceChildren = node.shadowRoot
+      ? Array.from(node.shadowRoot.childNodes)
+      : Array.from(node.childNodes);
+
+    for (const child of sourceChildren) {
+      const cloned = cloneArtifactNode(child);
+      if (cloned) clone.appendChild(cloned);
+    }
+    return clone;
+  }
+
+  function snapshotArtifactPanel(panel) {
+    const root = artifactContentRoot(panel);
+    return root ? cloneArtifactNode(root) : null;
   }
 
   function findArtifactPanel() {
-    const direct = resolve(document, ARTIFACT_CANDIDATES, 'claude.artifactPanel');
-    if (direct && !inConversationFlow(direct)) return direct;
-
-    const candidates = Array.from(document.querySelectorAll([
-      'aside [data-testid*="artifact" i]',
-      '[role="dialog"] [data-testid*="artifact" i]',
-      'aside [class*="artifact" i]',
-      '[role="dialog"] [class*="artifact" i]',
-      'iframe[title*="artifact" i]',
-      'iframe[title*="preview" i]',
-      'aside',
-      '[role="dialog"]'
-    ].join(', '))).filter(element => !inConversationFlow(element) && present(element));
+    const candidates = Array.from(document.querySelectorAll(ARTIFACT_PANEL_SELECTOR))
+      .filter(isVerifiedArtifactPanel);
 
     candidates.sort((a, b) => {
       const score = element => {
-        const marker = actionLabel(element);
-        const textLength = Math.min(50000, panelText(element).trim().length);
-        const semantic = /artifact|preview|document|code/.test(marker) ? 2500 : 0;
-        const rich = element.querySelector?.('pre, code, article, .prose, [class*="prose" i], table, ul, ol') ? 1200 : 0;
-        return textLength + semantic + rich;
+        const direct = element.matches(ARTIFACT_CONTENT_SELECTOR) ? 6000 : 0;
+        const frame = element.matches('iframe') ? 4000 : 0;
+        const rich = element.querySelector?.(
+          'pre, code, article, [class*="prose" i], table, canvas, svg, iframe'
+        ) ? 1500 : 0;
+        return direct + frame + rich + Math.min(3000, panelText(element).length);
       };
       return score(b) - score(a);
     });
@@ -173,18 +303,21 @@
     const selectors = [
       '[data-testid="artifact-card"]',
       '[data-testid*="artifact" i][role="button"]',
-      'button[aria-label*="artifact" i]',
-      '[class*="artifact" i]'
+      'button[aria-label*="artifact" i]'
     ];
     for (const selector of selectors) {
-      const found = Array.from(turn.querySelectorAll(selector));
+      const found = Array.from(turn.querySelectorAll(selector))
+        .filter(element => !isClaudeChrome(element));
       if (found.length) return found;
     }
 
+    // Last resort: only interactive elements. A bare class containing
+    // "artifact" is too broad and can match layout wrappers or navigation UI.
     return Array.from(turn.querySelectorAll('button, [role="button"]')).filter(element => {
       const label = actionLabel(element);
       return /(artifact|document|react component|\bcode\b|html|svg|markdown)/i.test(label) &&
-        !/copy|retry|feedback|edit|more/.test(label);
+        !/copy|retry|feedback|edit|more/.test(label) &&
+        !isClaudeChrome(element);
     });
   }
 
@@ -378,30 +511,42 @@
           // Wait for the readable artifact body to settle. The card title/type
           // alone does not count as artifact content.
           let panel = null;
-          let lastLength = -1;
+          let lastSignature = '';
           let stableRounds = 0;
-          const cardLabel = actionLabel(card);
-          for (let attempt = 0; attempt < 30; attempt++) {
+          const cardLabel = compactText(actionLabel(card)).toLowerCase();
+
+          for (let attempt = 0; attempt < 35; attempt++) {
             await sleep(120);
             panel = findArtifactPanel();
-            const readable = panelText(panel).replace(/\s+/g, ' ').trim();
-            const length = readable.length;
-            const onlyChrome = readable &&
+            const readable = panelText(panel);
+            const root = panel ? artifactContentRoot(panel) : null;
+            const signature = [
+              readable.slice(0, 1200),
+              root?.querySelectorAll?.('pre, code, article, table, img, svg, canvas')?.length || 0
+            ].join('|');
+
+            const onlyCardChrome = readable &&
               cardLabel &&
-              readable.length <= cardLabel.length + 24 &&
+              readable.length <= cardLabel.length + 32 &&
               cardLabel.includes(readable.toLowerCase());
 
-            if (panel && length > 0 && !onlyChrome) {
-              stableRounds = length === lastLength ? stableRounds + 1 : 0;
+            const hasRenderableContent = Boolean(
+              readable ||
+              root?.querySelector?.('pre, code, article, [class*="prose" i], table, img, svg, canvas')
+            );
+
+            if (panel && root && hasRenderableContent && !onlyCardChrome) {
+              stableRounds = signature === lastSignature ? stableRounds + 1 : 0;
               if (stableRounds >= 1) break;
             } else {
               stableRounds = 0;
             }
-            lastLength = length;
+            lastSignature = signature;
           }
 
-          // Detach the content before Claude reuses the side panel. Same-origin
-          // preview iframe bodies are imported so normal extraction can read them.
+          // Snapshot only a verified artifact content root. If Claude exposes a
+          // canvas or same-origin iframe, clone it into an exportable image/DOM
+          // representation instead of leaking surrounding app chrome.
           card.__cgxArtifactPanel = panel ? snapshotArtifactPanel(panel) : null;
         } catch {
           card.__cgxArtifactPanel = null;

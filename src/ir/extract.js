@@ -27,8 +27,21 @@
     'table', 'hr', 'figure', 'figcaption', 'details', 'dl', 'dt', 'dd'
   ]);
 
+  /**
+   * Strip characters that cannot be represented meaningfully in exported
+   * documents. Claude artifact previews can expose NUL/control characters from
+   * canvas/editor accessibility layers; pdfmake renders those as empty boxes.
+   * Keep TAB/LF/CR because they carry source-code and diagram layout.
+   */
+  function safeText(text) {
+    return String(text || '')
+      .replace(/\u0000/g, '')
+      .replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '')
+      .replace(/\u00a0/g, ' ');
+  }
+
   function normalizeWhitespace(text) {
-    return String(text || '').replace(/\u00a0/g, ' ').replace(/[ \t]+/g, ' ');
+    return safeText(text).replace(/[ \t]+/g, ' ');
   }
 
   const DIAGRAM_CHARS = /[┌┐└┘├┤┬┴┼│─━┃┏┓┗┛┣┫┳┻╋╭╮╰╯▼▲►◄→←⇒⇐]/u;
@@ -45,7 +58,7 @@
     const walk = node => {
       for (const child of Array.from(node.childNodes)) {
         if (child.nodeType === Node.TEXT_NODE) {
-          out.push(String(child.nodeValue || '').replace(/\u00a0/g, ' '));
+          out.push(safeText(child.nodeValue || ''));
           continue;
         }
         if (child.nodeType !== Node.ELEMENT_NODE) continue;
@@ -251,8 +264,7 @@
   function codeBlockFrom(el) {
     const codeEl = el.querySelector('code');
     // textContent on <pre> already preserves whitespace; keep it verbatim.
-    const text = String(codeEl?.textContent ?? el.textContent ?? '')
-      .replace(/\u00a0/g, ' ')
+    const text = safeText(codeEl?.textContent ?? el.textContent ?? '')
       .replace(/\s+$/, '');
     const cls = String(codeEl?.getAttribute('class') || el.getAttribute('class') || '');
     const lang = (cls.match(/language-([\w-]+)/i)?.[1] || el.getAttribute('data-language') || '').trim();
@@ -663,6 +675,7 @@
     extractInline,
     inlineNodesFor,
     fromMessage,
+    safeText,
     tidy
   });
 })();
