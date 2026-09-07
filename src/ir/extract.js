@@ -538,7 +538,7 @@
   function artifactBlock(card) {
     const title = artifactTitle(card);
     const panel = card.__cgxArtifactPanel;
-    const kind = artifactKind(card);
+    let kind = artifactKind(card);
 
     if (!panel) {
       return {
@@ -560,6 +560,14 @@
 
     const panelText = String(panel.textContent || '').trim();
     const codeText = String(panel.querySelector?.('pre, code')?.textContent || '').trim();
+
+    if (!kind) {
+      if (panel.querySelector?.('article, [class*="prose" i], h1, h2, h3, p, ul, ol, table')) {
+        kind = 'document';
+      } else if (panel.querySelector?.('pre, [class*="cm-content" i], [class*="code-block" i], [class*="font-mono" i]')) {
+        kind = 'code';
+      }
+    }
 
     // Only treat the panel as code when code is the DOMINANT content. A prose
     // document containing one inline `code` span was being flattened into a

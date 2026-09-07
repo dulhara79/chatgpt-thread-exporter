@@ -36,15 +36,6 @@
     () => document.body
   ];
 
-  const TURN_CANDIDATES = [
-    'div[data-test-render-count]',
-    '[class*="conversation-turn"]',
-    // Structural fallback: the common ancestor that holds a user message.
-    root => Array.from(root.querySelectorAll(USER_SELECTOR))
-      .map(node => node.closest('div[data-test-render-count]') || node.parentElement?.parentElement || node)
-      .filter(Boolean)
-  ];
-
   const BODY_CANDIDATES = [
     '.font-claude-response',
     '.font-claude-message',
@@ -102,6 +93,32 @@
     'pinned', 'chats and tasks', 'view all conversations'
   ];
 
+  const captureDiagnosticsState = {
+    cardsSeen: 0,
+    connectedCards: 0,
+    captured: 0,
+    failed: 0,
+    failures: []
+  };
+
+  function resetCaptureDiagnostics() {
+    captureDiagnosticsState.cardsSeen = 0;
+    captureDiagnosticsState.connectedCards = 0;
+    captureDiagnosticsState.captured = 0;
+    captureDiagnosticsState.failed = 0;
+    captureDiagnosticsState.failures = [];
+  }
+
+  function recordCaptureFailure(card, reason) {
+    captureDiagnosticsState.failed += 1;
+    if (captureDiagnosticsState.failures.length < 30) {
+      captureDiagnosticsState.failures.push({
+        title: compactText(actionLabel(card)).slice(0, 120),
+        reason
+      });
+    }
+  }
+
   function inConversationFlow(element) {
     return Boolean(element?.closest?.(
       'div[data-test-render-count], [class*="conversation-turn"], ' + USER_SELECTOR + ', ' + ASSISTANT_SELECTOR
@@ -151,13 +168,16 @@
 
     const text = compactText(element.innerText || element.textContent || '').toLowerCase();
     const chromeHits = CLAUDE_CHROME_PHRASES.filter(phrase => text.includes(phrase)).length;
-    if (chromeHits >= 4) return true;
 
+    // Document content is allowed to discuss Claude UI words such as Projects,
+    // Artifacts, Scheduled, Customize and Pinned. Treat those words as only a
+    // weak signal; structural navigation ancestry and link density are the hard
+    // rejection signals.
     const links = element.querySelectorAll?.('a[href]')?.length || 0;
     const rich = Boolean(element.querySelector?.(
       'pre, code, article, [class*="prose" i], table, canvas, svg, iframe'
     ));
-    return links >= 8 && !rich;
+    return (links >= 8 && !rich) || (chromeHits >= 6 && links >= 4 && !rich);
   }
 
   function isVerifiedArtifactPanel(element) {
@@ -211,6 +231,22 @@
     if (node.nodeType !== Node.ELEMENT_NODE) return null;
 
     const tag = node.tagName.toLowerCase();
+
+    // Strip Claude's artifact-viewer chrome without removing controls that are
+    // genuinely part of a rendered React/HTML artifact. Only controls with
+    // viewer-specific labels/testids/classes are removed.
+    const controlMarker = [
+      node.getAttribute?.('data-testid') || '',
+      node.getAttribute?.('class') || '',
+      node.getAttribute?.('aria-label') || '',
+      node.getAttribute?.('title') || ''
+    ].join(' ').toLowerCase();
+    if (
+      /artifact[-_ ]?(toolbar|controls)|viewer[-_ ]?(toolbar|controls)/.test(controlMarker) ||
+      (tag === 'button' && /^(close|copy|download|fullscreen|open in new)/.test(
+        compactText(node.getAttribute?.('aria-label') || node.getAttribute?.('title') || '')
+      ))
+    ) return null;
 
     if (tag === 'iframe') {
       try {
@@ -311,19 +347,60 @@
       if (found.length) return found;
     }
 
-    // Last resort: only interactive elements. A bare class containing
-    // "artifact" is too broad and can match layout wrappers or navigation UI.
-    return Array.from(turn.querySelectorAll('button, [role="button"]')).filter(element => {
+    // Last resort: score interactive answer controls instead of requiring the
+    // literal word "artifact". Claude frequently renders title-only artifact
+    // cards, so a visible title button with file/document iconography or an
+    // artifact/file-ish class/test id must still be considered.
+    return Array.from(turn.querySelectorAll('button, [role="button"], a[role="button"]')).filter(element => {
       const label = actionLabel(element);
-      return /(artifact|document|react component|\bcode\b|html|svg|markdown)/i.test(label) &&
-        !/copy|retry|feedback|edit|more/.test(label) &&
+      const ancestor = element.closest?.(
+        '[data-testid*="artifact" i], [class*="artifact" i], [class*="preview" i], [class*="document-card" i]'
+      );
+      const marker = [
+        element.getAttribute?.('data-testid') || '',
+        element.getAttribute?.('class') || '',
+        element.getAttribute?.('aria-label') || '',
+        element.getAttribute?.('title') || '',
+        ancestor?.getAttribute?.('data-testid') || '',
+        ancestor?.getAttribute?.('class') || ''
+      ].join(' ');
+      const hasArtifactSignal = /(artifact|document|react component|\bcode\b|html|svg|markdown|preview)/i.test(
+        label + ' ' + marker
+      );
+      const hasTitleShape =
+        label.length >= 4 &&
+        label.length <= 220 &&
+        Boolean(ancestor) &&
+        Boolean(element.querySelector?.('svg, [class*="icon" i], [class*="document" i], [class*="code" i]'));
+      const isDownloadLike = element.matches?.('a[href], [download]') ||
+        Boolean(element.querySelector?.('a[download], a[href*="/download" i]'));
+      return (hasArtifactSignal || hasTitleShape) &&
+        !isDownloadLike &&
+        !/copy|retry|feedback|edit|more|share|download/.test(label) &&
         !isClaudeChrome(element);
     });
+  }
+
+  function artifactPanelSignature(panel) {
+    if (!(panel instanceof Element)) return '';
+    const root = artifactContentRoot(panel);
+    return [
+      panel.getAttribute?.('data-testid') || '',
+      panel.getAttribute?.('aria-label') || '',
+      panelText(root || panel).slice(0, 1600),
+      root?.querySelectorAll?.('pre, code, article, table, img, svg, canvas, iframe')?.length || 0
+    ].join('|');
   }
 
   const adapter = defineAdapter({
     id: 'claude',
     label: 'Claude',
+
+    resetCaptureDiagnostics,
+
+    captureDiagnostics() {
+      return JSON.parse(JSON.stringify(captureDiagnosticsState));
+    },
 
     // Claude keeps only a window of a long conversation mounted. Everything
     // downstream must treat a plain DOM read as potentially partial (F-04).
@@ -421,8 +498,14 @@
       // fall back to a content hash, which survives Claude unmounting and
       // remounting the same turn during a scroll harvest.
       const user = adapter.userNode(owner);
-      const seed = (user?.innerText || node.innerText || '').slice(0, 400);
-      return 'hash:' + contentHash(seed);
+      const role = node.matches(USER_SELECTOR) || node.querySelector(USER_SELECTOR) ? 'user' : 'assistant';
+      const bodyText = String(user?.innerText || node.innerText || '');
+      const seed = role + '\u241E' + bodyText;
+      // Hash the complete message in both directions instead of truncating at
+      // 400 characters. Do not include neighbouring virtualized DOM: a message
+      // at the edge of a window may remount without the same neighbours.
+      return 'hash:' + contentHash(seed) + '-' +
+        contentHash(Array.from(seed).reverse().join('')) + '-' + seed.length;
     },
 
     conversationTitle() {
@@ -498,32 +581,41 @@
     async captureArtifacts(node) {
       const owner = turnOwner(node) || node;
       const cards = artifactCards(owner);
+      captureDiagnosticsState.cardsSeen += cards.length;
+      captureDiagnosticsState.connectedCards += cards.filter(card => card.isConnected).length;
       if (!cards.length) return [];
 
       const panelWasOpen = Boolean(findArtifactPanel());
 
       for (const card of cards) {
         if (card.__cgxArtifactPanel) continue;
+        if (!card.isConnected) {
+          card.__cgxArtifactPanel = null;
+          recordCaptureFailure(card, 'detached-card');
+          continue;
+        }
+
         try {
-          const button = card.matches('button') ? card : card.querySelector('button') || card;
+          const beforePanel = findArtifactPanel();
+          const beforeSignature = artifactPanelSignature(beforePanel);
+          const button = card.matches('button, [role="button"], a') ? card : card.querySelector('button, [role="button"], a') || card;
           button.click();
 
-          // Wait for the readable artifact body to settle. The card title/type
-          // alone does not count as artifact content.
+          // Wait for a panel that is both readable and attributable to this
+          // click. Accept a newly mounted panel or a changed signature; never
+          // silently reuse stale content from the previously open artifact.
           let panel = null;
           let lastSignature = '';
           let stableRounds = 0;
           const cardLabel = compactText(actionLabel(card)).toLowerCase();
 
-          for (let attempt = 0; attempt < 35; attempt++) {
-            await sleep(120);
+          for (let attempt = 0; attempt < 24; attempt++) {
+            await sleep(100);
             panel = findArtifactPanel();
             const readable = panelText(panel);
             const root = panel ? artifactContentRoot(panel) : null;
-            const signature = [
-              readable.slice(0, 1200),
-              root?.querySelectorAll?.('pre, code, article, table, img, svg, canvas')?.length || 0
-            ].join('|');
+            const signature = artifactPanelSignature(panel);
+            const changed = Boolean(panel) && (panel !== beforePanel || signature !== beforeSignature);
 
             const onlyCardChrome = readable &&
               cardLabel &&
@@ -532,10 +624,10 @@
 
             const hasRenderableContent = Boolean(
               readable ||
-              root?.querySelector?.('pre, code, article, [class*="prose" i], table, img, svg, canvas')
+              root?.querySelector?.('pre, code, article, [class*="prose" i], table, img, svg, canvas, iframe')
             );
 
-            if (panel && root && hasRenderableContent && !onlyCardChrome) {
+            if (changed && panel && root && hasRenderableContent && !onlyCardChrome) {
               stableRounds = signature === lastSignature ? stableRounds + 1 : 0;
               if (stableRounds >= 1) break;
             } else {
@@ -544,19 +636,40 @@
             lastSignature = signature;
           }
 
-          // Snapshot only a verified artifact content root. If Claude exposes a
-          // canvas or same-origin iframe, clone it into an exportable image/DOM
-          // representation instead of leaking surrounding app chrome.
-          card.__cgxArtifactPanel = panel ? snapshotArtifactPanel(panel) : null;
-        } catch {
+          const changedPanel = panel && artifactPanelSignature(panel) !== beforeSignature
+            ? panel
+            : null;
+          card.__cgxArtifactPanel = changedPanel ? snapshotArtifactPanel(changedPanel) : null;
+
+          if (card.__cgxArtifactPanel) {
+            captureDiagnosticsState.captured += 1;
+          } else if (changedPanel?.matches?.('iframe') || changedPanel?.querySelector?.('iframe')) {
+            recordCaptureFailure(card, 'inaccessible-or-empty-iframe');
+          } else {
+            recordCaptureFailure(card, panel ? 'panel-did-not-change' : 'panel-not-found');
+          }
+        } catch (error) {
           card.__cgxArtifactPanel = null;
+          recordCaptureFailure(card, 'capture-error: ' + String(error?.message || error).slice(0, 100));
         }
       }
 
       if (!panelWasOpen) {
-        const close = document.querySelector(
-          'button[aria-label*="Close" i], button[data-testid="close-artifact"]'
-        );
+        const activePanel = findArtifactPanel();
+        let scope = activePanel;
+        for (let depth = 0; scope?.parentElement && depth < 4; depth++) {
+          const parent = scope.parentElement;
+          const marker = [
+            parent.getAttribute?.('data-testid') || '',
+            parent.getAttribute?.('class') || '',
+            parent.getAttribute?.('aria-label') || ''
+          ].join(' ');
+          scope = parent;
+          if (/artifact|preview/i.test(marker)) break;
+        }
+        const close = scope?.querySelector?.(
+          'button[data-testid="close-artifact"], button[aria-label*="Close artifact" i], button[aria-label="Close"]'
+        ) || document.querySelector('button[data-testid="close-artifact"]');
         try { close?.click(); } catch {}
         await sleep(80);
       }

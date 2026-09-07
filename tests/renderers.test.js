@@ -80,14 +80,15 @@ test('F-07: a code block inside a numbered step renders inside that step', () =>
   assert.ok(findNode(ol.ol[0], node => node.cgxPreformatted), 'the code stays inside step 1');
 });
 
-test('F-08: long code lines wrap at a legible size instead of being clipped', () => {
+test('F-08: long code lines stay exact and wrap only at PDF layout time', () => {
   const long = 'const x = ' + '"abcdefghij"'.repeat(30) + ';';
   const definition = exporter.buildPdfDefinition(DATA, [turn('```js\n' + long + '\n```')]);
 
   const code = findNode(definition.content, node => node.cgxPreformatted);
   assert.ok(code.cgxPreformatted.fontSize >= 8, 'never shrinks below print-legible size');
   assert.equal(code.cgxPreformatted.diagram, false);
-  assert.ok(code.cgxPreformatted.text.includes('\u21B4'), 'wrapped lines carry a continuation marker');
+  assert.equal(code.cgxPreformatted.text, long, 'the exported selectable code must equal the source exactly');
+  assert.ok(!/[↴↳]/u.test(code.cgxPreformatted.text), 'no synthetic continuation glyphs are inserted');
 });
 
 test('F-08: character diagrams keep exact columns', () => {
@@ -106,9 +107,14 @@ test('F-09: PDF tables repeat their header row and honour alignment', () => {
   assert.equal(table.table.body[0][1].alignment, 'right');
 });
 
-test('F-10: question boxes are unbreakable across pages', () => {
+test('F-10: question labels stay intact while long question bodies may paginate', () => {
   const definition = exporter.buildPdfDefinition(DATA, [turn('answer')]);
-  assert.ok(findNode(definition.content, node => node.unbreakable === true));
+  const question = definition.content.find(node =>
+    Array.isArray(node.stack) && node.stack.some(child => child?.tocText)
+  );
+  assert.ok(question, 'question container exists');
+  assert.notEqual(question.unbreakable, true, 'the whole question must not be forced onto one page');
+  assert.equal(question.stack[0].unbreakable, undefined, 'label is a short single text node already');
 });
 
 test('F-11: a table of contents appears once the thread is long enough', () => {
@@ -124,6 +130,14 @@ test('script runs are split so each alphabet gets its bundled font', () => {
   for (const font of ['latin', 'sinhala', 'tamil', 'korean', 'emoji']) {
     assert.ok(fonts.has(font), 'expected a ' + font + ' run');
   }
+});
+
+test('emoji shaping controls never reach pdfmake as visible glyphs', () => {
+  const definition = exporter.buildPdfDefinition(DATA, [turn('Emoji ❤️ family 👨‍👩‍👧‍👦 and 😀')]);
+  const raw = JSON.stringify(definition);
+  assert.ok(!raw.includes('\u200d'), 'ZWJ must not become a blank PDF glyph');
+  assert.ok(!raw.includes('\ufe0f'), 'variation selector must not become a blank PDF glyph');
+  assert.ok(raw.includes('😀'), 'base emoji remains in the document');
 });
 
 test('the PDF definition survives a JSON round-trip through extension messaging', () => {

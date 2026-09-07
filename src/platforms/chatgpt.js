@@ -90,6 +90,82 @@
     return node.closest('article, [data-testid^="conversation-turn"], [data-message-id]') || node.parentElement;
   }
 
+  const TEXT_ATTACHMENT_EXT = /\.(?:txt|md|markdown|mdown|mkd|csv|tsv|json|jsonl|ya?ml|toml|ini|cfg|conf|log|xml|html?|css|scss|less|js|jsx|mjs|cjs|ts|tsx|py|rb|php|java|kt|kts|go|rs|c|h|cc|cpp|cxx|hpp|cs|swift|scala|sh|bash|zsh|fish|ps1|sql|r|R|lua|pl|pm|patch|diff|tex)$/i;
+  const ATTACHMENT_LINK_SELECTOR = [
+    'a[download]',
+    'a[href^="blob:"]',
+    'a[href^="sandbox:"]',
+    'a[href*="oaiusercontent.com"]',
+    'a[href*="oaistatic.com"]',
+    'a[href*="/files/"]',
+    'a[href*="/mnt/data/"]'
+  ].join(', ');
+
+  function attachmentName(element) {
+    if (!(element instanceof Element)) return '';
+    const link = element.matches('a[href]') ? element : element.querySelector('a[href]');
+    const rawHref = String(link?.getAttribute('href') || '');
+    let hrefName = '';
+    try {
+      hrefName = decodeURIComponent(rawHref.split(/[?#]/)[0].split('/').filter(Boolean).pop() || '');
+    } catch {}
+    return [
+      element.getAttribute('data-filename') || '',
+      element.getAttribute('aria-label') || '',
+      element.getAttribute('download') || '',
+      link?.getAttribute('download') || '',
+      hrefName,
+      element.textContent || ''
+    ].find(value => TEXT_ATTACHMENT_EXT.test(String(value || '').trim())) || '';
+  }
+
+  function readableAttachmentNode(element) {
+    if (!(element instanceof Element)) return null;
+    const candidates = [
+      element.matches('pre, textarea, [class*="whitespace-pre" i], [class*="font-mono" i]') ? element : null,
+      ...Array.from(element.querySelectorAll(
+        'pre, textarea, [class*="whitespace-pre" i], [class*="font-mono" i], [data-testid*="content" i]'
+      ))
+    ].filter(Boolean);
+    candidates.sort((a, b) =>
+      String(b.value || b.textContent || '').length - String(a.value || a.textContent || '').length
+    );
+    return candidates.find(candidate => String(candidate.value || candidate.textContent || '').trim()) || null;
+  }
+
+  function downloadableAttachmentUrl(element) {
+    if (!(element instanceof Element)) return '';
+    const candidates = [];
+    const addAttrs = target => {
+      if (!(target instanceof Element)) return;
+      for (const attr of ['href', 'data-url', 'data-file-url', 'data-download-url', 'data-src']) {
+        const value = target.getAttribute(attr);
+        if (value) candidates.push(value);
+      }
+    };
+    addAttrs(element);
+    for (const target of element.querySelectorAll('a[href], [data-url], [data-file-url], [data-download-url]')) {
+      addAttrs(target);
+    }
+
+    for (const raw of candidates) {
+      try {
+        const url = new URL(raw, location.href);
+        if (url.protocol === 'blob:' || url.protocol === 'sandbox:') return url.href;
+        if (url.protocol !== 'https:' && url.protocol !== 'http:') continue;
+        const host = url.hostname.toLowerCase();
+        if (
+          host === location.hostname ||
+          host === 'chatgpt.com' ||
+          host === 'chat.openai.com' ||
+          host.endsWith('.oaiusercontent.com') ||
+          host.endsWith('.oaistatic.com')
+        ) return url.href;
+      } catch {}
+    }
+    return '';
+  }
+
   const adapter = defineAdapter({
     id: 'chatgpt',
     label: 'ChatGPT',
@@ -178,7 +254,12 @@
       if (messageId) return 'message:' + messageId;
       const testId = owner.getAttribute?.('data-testid');
       if (testId) return 'testid:' + testId;
-      return 'hash:' + contentHash((node.innerText || '').slice(0, 400));
+      const role = node.getAttribute('data-message-author-role') ||
+        (node.querySelector(USER_SELECTOR) ? 'user' : 'assistant');
+      const ownerText = String(node.innerText || '');
+      const seed = role + '\u241E' + ownerText;
+      return 'hash:' + contentHash(seed) + '-' +
+        contentHash(Array.from(seed).reverse().join('')) + '-' + seed.length;
     },
 
     conversationTitle() {
@@ -233,7 +314,61 @@
         // Long pasted text becomes its own card on ChatGPT too.
         '[class*="pasted" i]'
       ].join(', ')));
-      return found.filter(el => !found.some(other => other !== el && other.contains(el)));
+
+      // Assistant-generated files are often rendered as download links rather
+      // than the same attachment chip used for user uploads. Include only
+      // download/file-store links so ordinary hyperlinks such as GitHub README
+      // links are not misclassified as attachments.
+      for (const link of scope.querySelectorAll(ATTACHMENT_LINK_SELECTOR)) {
+        const wrapper = link.closest(
+          '[data-testid*="file" i], [data-testid*="attachment" i], [class*="attachment" i], [class*="file-card" i]'
+        );
+        found.push(wrapper || link);
+      }
+
+      const unique = Array.from(new Set(found));
+      return unique.filter(el => !unique.some(other => other !== el && other.contains(el)));
+    },
+
+    async captureAttachments(turn) {
+      const items = adapter.attachments(turn);
+      if (!items.length) return [];
+
+      for (const item of items) {
+        if (item.__cgxAttachmentContent) continue;
+        const filename = attachmentName(item);
+        if (!TEXT_ATTACHMENT_EXT.test(filename)) continue;
+
+        const readable = readableAttachmentNode(item);
+        if (readable) {
+          item.__cgxAttachmentContent = readable.cloneNode(true);
+          continue;
+        }
+
+        const url = downloadableAttachmentUrl(item);
+        if (!url) continue;
+
+        try {
+          const parsed = new URL(url, location.href);
+          const response = await fetch(url, {
+            credentials: parsed.origin === location.origin ? 'include' : 'omit',
+            referrerPolicy: 'no-referrer'
+          });
+          if (!response.ok) continue;
+          const declared = Number(response.headers.get('content-length') || 0);
+          if (declared > 4 * 1024 * 1024) continue;
+          const bytes = new Uint8Array(await response.arrayBuffer());
+          if (!bytes.length || bytes.length > 4 * 1024 * 1024) continue;
+
+          const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+          if (!text.trim()) continue;
+          const pre = document.createElement('pre');
+          pre.textContent = text;
+          item.__cgxAttachmentContent = pre;
+        } catch {}
+      }
+
+      return items;
     },
 
     async ensureFullyLoaded(options = {}) {

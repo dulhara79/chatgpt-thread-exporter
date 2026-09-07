@@ -7,7 +7,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { zipSync } from 'fflate';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -58,7 +58,15 @@ fs.mkdirSync(dist, { recursive: true });
 const output = path.join(dist, `ai-thread-exporter-${manifest.version}.zip`);
 fs.rmSync(output, { force: true });
 
-execFileSync('zip', ['-q', '-X', output, ...files], { cwd: ROOT });
+// Build the store package in JavaScript so Windows does not need a system
+// `zip` executable. fflate is already a development dependency used by the
+// test suite, and preserves the same deterministic explicit file list.
+const entries = {};
+for (const file of files) {
+  entries[file.replace(/\\/g, '/')] = new Uint8Array(fs.readFileSync(path.join(ROOT, file)));
+}
+const archive = zipSync(entries, { level: 6 });
+fs.writeFileSync(output, archive);
 
 const size = (fs.statSync(output).size / 1024 / 1024).toFixed(2);
 console.log(`Built ${path.relative(ROOT, output)} (${size} MB, ${files.length} files)`);

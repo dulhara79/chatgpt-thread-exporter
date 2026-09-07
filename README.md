@@ -1,4 +1,4 @@
-# AI Thread Exporter (V0.6.3)
+# AI Thread Exporter (V0.6.4)
 
 Export a **ChatGPT** or **Claude** conversation — the whole thread, a range, or a single
 question-and-answer pair — to a properly structured **PDF**, **Word (.docx)** or **Markdown**
@@ -24,14 +24,15 @@ document. Everything runs locally in your browser.
 - No `debugger` permission, no page screenshots, no reading of the sites' internal APIs.
 - Rendering happens in a local MV3 offscreen document; downloads always go through a **Save As** dialog
   so you choose the destination.
-- The only network requests are to fetch images that are already displayed in the conversation you are exporting,
-  so they can be embedded in the Word file. Turn this off in Settings.
+- The exporter may fetch media already displayed in the conversation and assistant-generated text files from
+  safe ChatGPT/OpenAI URLs already present in the page so their contents can be embedded. It does not discover
+  or call hidden internal APIs. Image embedding can be disabled in Settings.
 
 ## Install (unpacked)
 
 ```bash
-git clone https://github.com/dulhara79/ai-thread-exporter.git
-cd ai-thread-exporter
+git clone https://github.com/dulhara79/chatgpt-thread-exporter.git
+cd chatgpt-thread-exporter
 ```
 
 Then open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the folder.
@@ -75,26 +76,31 @@ Stated plainly, because these matter more than feature lists:
   whole thread into memory first, waiting for each lazily loaded page. If it still cannot reach the top it
   tells you how many turns it captured and marks the export *partial* — it never truncates silently.
   Very long threads take a few seconds; the progress line shows the running turn count.
-- **Claude artifacts** live in a side panel. The exporter opens each one, captures it, and restores the
-  panel. If an artifact cannot be opened, the document says so in its place rather than exporting a blank.
+- **Claude artifacts** live in a side panel. The exporter captures each artifact while its message is still
+  mounted, before Claude's virtualized conversation can detach the card. Capture diagnostics report detached
+  cards, missing panels and panel-change failures. If an artifact cannot be opened, the document says so rather
+  than silently dropping it.
 - **PDFs are not tagged.** There is no structure tree, no reading order and no alt text in the PDF output,
   so it is not PDF/UA or PDF/A conformant. Word output is better for accessibility. Fixing this properly
   means replacing pdfmake.
-- **Emoji render monochrome** in PDF. The bundled emoji font is the monochrome flavour; colour emoji need
-  font formats pdfmake cannot embed.
+- **Emoji render monochrome** in PDF. Variation selectors and ZWJ shaping controls are removed from the PDF
+  glyph stream because pdfmake can render them as blank boxes; the base emoji remain. Complex joined emoji may
+  therefore appear as adjacent monochrome emoji rather than one colour glyph.
 - **Syntax highlighting** is not implemented. Code blocks are monospaced and shaded but not coloured.
 - **Response branches.** If you have regenerated an answer, only the variant currently displayed is exported.
-- **File attachments.** Text-like files (`.py`, `.md`, `.html`, `.patch`, `.json`, ...) export their contents
-  when the page exposes them. Archives and binaries (`.zip`, `.tar.gz`, `.png`, `.docx`) are recorded by name
-  only — their bytes are never in the page, so the exporter cannot open them.
-- **Selectors are unverified against the live sites** in this release. They are derived from public tooling and
-  fixture DOM. Verify with Settings → **Generate report** and open an issue if a tier-1 selector is missing.
+- **File attachments.** Text-like files (`.py`, `.md`, `.html`, `.patch`, `.json`, ...) are captured from
+  both user questions and assistant-generated download cards when the page exposes readable content or a safe
+  local/OpenAI file URL. Archives and binaries (`.zip`, `.tar.gz`, `.png`, `.docx`) are recorded by name only
+  when their bytes are not exposed by the rendered page.
+- **Site DOM is not a public API.** The automated browser suite uses committed redacted fixtures, not live
+  authenticated conversations. Settings → **Generate report** now includes artifact capture diagnostics so a
+  site change can be identified without exporting private content.
 
 ## Development
 
 ```bash
 npm install
-npm test              # every suite (106 tests)
+npm test              # every suite
 npm run test:unit     # fast suites, no browser needed
 npm run version:check # fail on manifest/package/README drift
 npm run build         # dist/ai-thread-exporter-<version>.zip
@@ -111,7 +117,7 @@ The suite is deliberately split:
 | `tests/reported-issues.test.js` | Regressions reported from real-world use |
 | `tests/font-coverage.test.js` | Reads the bundled font cmaps so no character is routed to a font lacking its glyph |
 | `tests/pdf-font-smoke.test.js` | Renders a real multi-script PDF with the bundled fonts |
-| `tests/browser-extension-smoke.mjs` | Loads the extension in real Chrome; selector canary |
+| `tests/browser-extension-smoke.mjs` | Loads the extension in real Chrome against redacted fixture DOM and exercises artifact capture |
 
 Behaviour tests assert on **structure**, not on source strings. Grep-style assertions live only in
 `architecture-guards` and only where nothing observable can express the invariant.

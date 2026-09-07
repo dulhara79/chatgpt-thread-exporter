@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    # Weekly selector canary: catches a ChatGPT/Claude DOM change before users do.
+    # Weekly fixture-contract smoke: catches regressions against committed redacted DOM fixtures.
     - cron: '0 6 * * 1'
 
 jobs:

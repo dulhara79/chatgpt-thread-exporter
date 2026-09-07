@@ -63,10 +63,15 @@
     // Artifact bodies live in a side panel, so capturing them means opening
     // each one. Only done for assistant messages, and only when enabled.
     let artifacts = [];
+    let excludedArtifactCount = 0;
     if (isAssistant && settings.includeArtifacts !== false) {
       artifacts = typeof adapter.captureArtifacts === 'function'
         ? await adapter.captureArtifacts(node)
         : adapter.artifacts(node);
+    } else if (isAssistant && settings.includeArtifacts === false) {
+      try {
+        excludedArtifactCount = (adapter.artifacts?.(node) || []).length;
+      } catch {}
     }
 
     const blocks = extractor.fromMessage(body, {
@@ -75,6 +80,22 @@
       includeThinking: settings.includeThinking,
       includeArtifacts: settings.includeArtifacts !== false
     });
+
+    if (excludedArtifactCount > 0) {
+      blocks.push({
+        type: 'paragraph',
+        inline: [{
+          type: 'em',
+          children: [{
+            type: 'text',
+            text: excludedArtifactCount === 1
+              ? '1 artifact was excluded by the current export settings.'
+              : excludedArtifactCount + ' artifacts were excluded by the current export settings.'
+          }]
+        }]
+      });
+    }
+
     if (!blocks.length) return null;
     return { role, blocks, text: IR.blocksToPlainText(blocks) };
   }
@@ -93,6 +114,35 @@
     };
   }
 
+  async function captureAttachmentsFor(node) {
+    if (!node) return null;
+    if (typeof adapter.captureAttachments !== 'function') {
+      return adapter.attachments?.(node) || null;
+    }
+    try {
+      return await adapter.captureAttachments(node);
+    } catch {
+      return null;
+    }
+  }
+
+  function appendAttachmentExtras(message, node, captured, role) {
+    if (!node) return message;
+    const existing = message ? message.text : '';
+    const extras = attachmentBlocks(node, captured).filter(block => {
+      const text = IR.blocksToPlainText([block]).trim();
+      return text && !(text.length > 24 && existing.includes(text));
+    });
+    if (!extras.length) return message;
+
+    if (message) {
+      message.blocks = message.blocks.concat(extras);
+      message.text = IR.blocksToPlainText(message.blocks);
+      return message;
+    }
+    return { role, blocks: extras, text: IR.blocksToPlainText(extras) };
+  }
+
   /**
    * Build one turn from a question node and its answer nodes.
    *
@@ -105,14 +155,9 @@
     const questionNode = group.question;
     const answerNodes = group.answers || [];
 
-    let capturedAttachments = null;
-    if (questionNode && typeof adapter.captureAttachments === 'function') {
-      try {
-        capturedAttachments = await adapter.captureAttachments(questionNode);
-      } catch {
-        capturedAttachments = null;
-      }
-    }
+    const capturedAttachments = questionNode
+      ? await captureAttachmentsFor(questionNode)
+      : null;
 
     let question = questionNode ? await messageFrom(questionNode, 'user') : null;
 
@@ -122,30 +167,15 @@
     if (questionNode && (!question || !question.text.trim())) {
       question = fallbackMessage(questionNode, 'user') || question;
     }
+    question = appendAttachmentExtras(question, questionNode, capturedAttachments, 'user');
 
     const answers = [];
     for (const node of answerNodes) {
+      const capturedAnswerAttachments = await captureAttachmentsFor(node);
       let message = await messageFrom(node, 'assistant');
       if (!message) message = fallbackMessage(node, 'assistant');
+      message = appendAttachmentExtras(message, node, capturedAnswerAttachments, 'assistant');
       if (message) answers.push(message);
-    }
-
-    // Attachments and pasted files sit outside the message body.
-    if (questionNode) {
-      const existing = question ? question.text : '';
-      const extras = attachmentBlocks(questionNode, capturedAttachments).filter(block => {
-        // Skip anything the question body already contains verbatim.
-        const text = IR.blocksToPlainText([block]).trim();
-        return text && !(text.length > 24 && existing.includes(text));
-      });
-      if (extras.length) {
-        if (question) {
-          question.blocks = question.blocks.concat(extras);
-          question.text = IR.blocksToPlainText(question.blocks);
-        } else {
-          question = { role: 'user', blocks: extras, text: IR.blocksToPlainText(extras) };
-        }
-      }
     }
 
     if (!question && !answers.length) return null;
@@ -216,17 +246,30 @@
       ].join(' ').replace(/\s+/g, ' ').trim();
       const pasted = /paste|pasted/i.test(descriptor);
 
+      const link = element.matches?.('a[href]')
+        ? element
+        : element.querySelector?.('a[href]');
+      const rawHref = String(link?.getAttribute?.('href') || '');
+      let hrefName = '';
+      try {
+        const cleanHref = rawHref.split(/[?#]/)[0];
+        hrefName = decodeURIComponent(cleanHref.split('/').filter(Boolean).pop() || '');
+      } catch {}
+
       const explicitName = String(
         element.getAttribute?.('data-filename') ||
         element.getAttribute?.('aria-label') ||
+        element.getAttribute?.('download') ||
+        link?.getAttribute?.('download') ||
         element.querySelector?.('[class*="name" i], [class*="title" i]')?.textContent ||
+        hrefName ||
         ''
       ).replace(/\s+/g, ' ').trim();
 
       const fallbackName = pasted
         ? 'Pasted content'
         : String(element.textContent || '').replace(/\s+/g, ' ').trim();
-      const name = (explicitName || fallbackName).slice(0, 120);
+      const name = (explicitName || fallbackName).slice(0, 160);
       if (!name || seen.has(name)) continue;
       seen.add(name);
 
@@ -331,8 +374,26 @@
     let groups = kit.groupTurns(adapter.messages());
     let complete = true;
 
+    adapter.resetCaptureDiagnostics?.();
+
     if (adapter.virtualized) {
-      const harvest = await adapter.ensureFullyLoaded({ onProgress: options.onProgress });
+      const harvest = await adapter.ensureFullyLoaded({
+        onProgress: options.onProgress,
+        // Capture interactive extras while each virtualized message is still
+        // connected. Static DOM survives detachment; artifact clicks and file
+        // expansion do not.
+        captureMessage: async message => {
+          if (!message?.node) return;
+          if (message.role === 'assistant' &&
+              settings.includeArtifacts !== false &&
+              typeof adapter.captureArtifacts === 'function') {
+            await adapter.captureArtifacts(message.node);
+          }
+          if (typeof adapter.captureAttachments === 'function') {
+            await adapter.captureAttachments(message.node);
+          }
+        }
+      });
       if (harvest.turns?.length) groups = harvest.turns;
       complete = harvest.complete;
     }
@@ -834,6 +895,14 @@
         virtualized: adapter.virtualized,
         turns: adapter.turnContainers().length,
         selectors: kit.diagnostics.snapshot(),
+        effectiveSettings: {
+          includeArtifacts: settings.includeArtifacts !== false,
+          includeThinking: settings.includeThinking === true,
+          embedImages: settings.embedImages !== false
+        },
+        artifactDiagnostics: typeof adapter.captureDiagnostics === 'function'
+          ? adapter.captureDiagnostics()
+          : null,
         userAgent: navigator.userAgent,
         version: chrome.runtime.getManifest().version
       });

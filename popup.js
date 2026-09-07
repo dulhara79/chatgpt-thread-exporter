@@ -144,7 +144,8 @@ $('pdf').addEventListener('click', async () => {
   }
 });
 
-readCurrentTab();
+setStatus('Click Refresh to read this conversation.');
+render();
 
 
 const versionEl = document.getElementById('version');
