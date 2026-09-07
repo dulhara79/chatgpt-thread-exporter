@@ -161,3 +161,14 @@ test('attachment capture failures are rendered into the exported conversation', 
   assert.match(content, /could not be read/i,
     'the exported document must explain an unreadable text attachment instead of emitting a blank label');
 });
+
+
+test('privileged text-attachment fetch is narrowly allowlisted and size bounded', () => {
+  const background = readSource('background.js');
+  assert.match(background, /CGX_FETCH_TEXT_ATTACHMENT/);
+  assert.match(background, /oaiusercontent\.com/);
+  assert.match(background, /oaistatic\.com/);
+  assert.match(background, /4 \* 1024 \* 1024/);
+  assert.ok(!/fetch\(request\.url/.test(background),
+    'service worker must validate/canonicalize an attachment URL before privileged fetch');
+});
