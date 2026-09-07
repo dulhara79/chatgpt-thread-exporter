@@ -241,6 +241,22 @@
 
     const tag = node.tagName.toLowerCase();
 
+    // Strip Claude's artifact-viewer chrome without removing controls that are
+    // genuinely part of a rendered React/HTML artifact. Only controls with
+    // viewer-specific labels/testids/classes are removed.
+    const controlMarker = [
+      node.getAttribute?.('data-testid') || '',
+      node.getAttribute?.('class') || '',
+      node.getAttribute?.('aria-label') || '',
+      node.getAttribute?.('title') || ''
+    ].join(' ').toLowerCase();
+    if (
+      /artifact[-_ ]?(toolbar|controls)|viewer[-_ ]?(toolbar|controls)/.test(controlMarker) ||
+      (tag === 'button' && /^(close|copy|download|fullscreen|open in new)/.test(
+        compactText(node.getAttribute?.('aria-label') || node.getAttribute?.('title') || '')
+      ))
+    ) return null;
+
     if (tag === 'iframe') {
       try {
         const body = node.contentDocument?.body;
