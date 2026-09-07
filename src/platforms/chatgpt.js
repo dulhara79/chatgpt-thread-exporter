@@ -151,7 +151,7 @@
     for (const raw of candidates) {
       try {
         const url = new URL(raw, location.href);
-        if (url.protocol === 'blob:') return url.href;
+        if (url.protocol === 'blob:' || url.protocol === 'sandbox:') return url.href;
         if (url.protocol !== 'https:' && url.protocol !== 'http:') continue;
         const host = url.hostname.toLowerCase();
         if (
