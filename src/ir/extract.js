@@ -352,7 +352,10 @@
       // alignment is destroyed by whitespace collapsing.
       if (looksLikeCharacterDiagram(child)) {
         flush();
-        const text = preservedText(child);
+        // Nested block rows can contribute both their own newline and the
+        // wrapper newline. Collapse only empty separator rows here; source
+        // characters, indentation and meaningful lines remain byte-for-byte.
+        const text = preservedText(child).replace(/\n[ \t]*\n/g, '\n');
         blocks.push({ type: 'code', lang: '', text, diagram: true });
         continue;
       }
