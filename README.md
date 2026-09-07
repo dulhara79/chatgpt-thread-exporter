@@ -24,8 +24,9 @@ document. Everything runs locally in your browser.
 - No `debugger` permission, no page screenshots, no reading of the sites' internal APIs.
 - Rendering happens in a local MV3 offscreen document; downloads always go through a **Save As** dialog
   so you choose the destination.
-- The only network requests are to fetch images that are already displayed in the conversation you are exporting,
-  so they can be embedded in the Word file. Turn this off in Settings.
+- The exporter may fetch media already displayed in the conversation and assistant-generated text files from
+  safe ChatGPT/OpenAI URLs already present in the page so their contents can be embedded. It does not discover
+  or call hidden internal APIs. Image embedding can be disabled in Settings.
 
 ## Install (unpacked)
 
@@ -116,7 +117,7 @@ The suite is deliberately split:
 | `tests/reported-issues.test.js` | Regressions reported from real-world use |
 | `tests/font-coverage.test.js` | Reads the bundled font cmaps so no character is routed to a font lacking its glyph |
 | `tests/pdf-font-smoke.test.js` | Renders a real multi-script PDF with the bundled fonts |
-| `tests/browser-extension-smoke.mjs` | Loads the extension in real Chrome; selector canary |
+| `tests/browser-extension-smoke.mjs` | Loads the extension in real Chrome against redacted fixture DOM and exercises artifact capture |
 
 Behaviour tests assert on **structure**, not on source strings. Grep-style assertions live only in
 `architecture-guards` and only where nothing observable can express the invariant.
