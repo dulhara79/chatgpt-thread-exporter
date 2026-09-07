@@ -14,6 +14,7 @@ let browser;
 try {
   browser = await puppeteer.launch({
     headless: false,
+    pipe: true,
     userDataDir,
     enableExtensions: [extensionPath],
     args: ['--no-sandbox', '--disable-dev-shm-usage']
