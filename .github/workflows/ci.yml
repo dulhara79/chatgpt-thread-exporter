@@ -1,34 +1,57 @@
 name: CI
 
 on:
-  pull_request:
-    branches: [main]
   push:
     branches: [main]
-
-permissions:
-  contents: read
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly selector canary: catches a ChatGPT/Claude DOM change before users do.
+    - cron: '0 6 * * 1'
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
-      - run: npm test
-      - run: npm run check
+          node-version: '22'
+          cache: npm
 
+      - name: Install dependencies
+        run: npm ci
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
 
-  browser-smoke:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Check version consistency
+        run: npm run version:check
+
+      - name: Syntax check every shipped script
+        run: |
+          for file in $(node -e "
+            const m=require('./manifest.json');
+            const f=new Set(m.content_scripts[0].js);
+            f.add(m.background.service_worker); f.add('pdf-worker.js'); f.add('popup.js'); f.add('options.js');
+            console.log([...f].join(' '));
+          "); do
+            node --check "$file" || exit 1
+          done
+
+      - name: Unit and DOM tests
+        run: npm run test:unit
+
+      - name: Install Chrome for the offscreen smoke test
+        run: npx puppeteer browsers install chrome
+
+      - name: Real-Chrome extension smoke test
+        run: xvfb-run -a npm run test:smoke
+
+      - name: Build store package
+        run: npm run build
+
+      - uses: actions/upload-artifact@v4
         with:
-          node-version: 24
-      - name: Install browser test driver and Chrome for Testing
-        run: npm install --no-save --no-audit --no-fund puppeteer@25.10.0
-      - name: Run real Chromium extension smoke
-        run: xvfb-run -a node tests/browser-extension-smoke.mjs
+          name: extension-zip
+          path: dist/*.zip

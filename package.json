@@ -1,9 +1,22 @@
 {
-  "name": "chatgpt-thread-exporter",
-  "version": "0.5.2",
+  "name": "ai-thread-exporter",
+  "version": "0.6.3",
   "private": true,
+  "description": "Export ChatGPT and Claude conversations to professional PDF, Word and Markdown documents.",
   "scripts": {
-    "test": "node --test tests/exporter-regression.test.js tests/pdf-fidelity-regression.test.js tests/pdf-font-smoke.test.js tests/pdf-lifecycle-regression.test.js",
-    "check": "node --check math.js && node --check exporter.js && node --check content.js && node --check popup.js && node --check background.js && node --check pdf-worker.js"
+    "test": "node scripts/test.mjs",
+    "test:unit": "node scripts/test.mjs unit",
+    "test:smoke": "node scripts/test.mjs smoke",
+    "version:sync": "node scripts/sync-version.mjs",
+    "version:check": "node scripts/sync-version.mjs --check",
+    "build": "node scripts/build.mjs"
+  },
+  "devDependencies": {
+    "fflate": "^0.8.2",
+    "jsdom": "^26.1.0",
+    "puppeteer": "^24.10.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

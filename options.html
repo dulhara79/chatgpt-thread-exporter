@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Thread Exporter — Settings</title>
+  <style>
+    :root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 28px; background: #f7f7f8; color: #202123; max-width: 680px; }
+    h1 { font-size: 20px; margin: 0 0 6px; }
+    p.sub { margin: 0 0 22px; color: #6b6c70; font-size: 13px; }
+    section { background: #fff; border: 1px solid #e2e2e5; border-radius: 10px; padding: 16px 18px; margin-bottom: 16px; }
+    h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: #64748b; margin: 0 0 12px; }
+    label.row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 0; font-size: 14px; }
+    label.row small { display: block; color: #6b6c70; font-size: 12px; margin-top: 2px; }
+    select, input[type="text"] { font: inherit; padding: 6px 8px; border-radius: 7px; border: 1px solid #d9d9dc; background: #fff; min-width: 190px; }
+    button { font: inherit; font-weight: 650; padding: 8px 14px; border-radius: 8px; border: 1px solid #d9d9dc; background: #fff; cursor: pointer; }
+    button.primary { background: #17365d; color: #fff; border-color: #17365d; }
+    #status { font-size: 12px; color: #16a34a; min-height: 18px; margin-top: 10px; }
+    pre { background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 8px; font-size: 11px; overflow: auto; max-height: 260px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>AI Thread Exporter</h1>
+  <p class="sub">Settings apply to ChatGPT and Claude. Everything stays in your browser.</p>
+
+  <section>
+    <h2>Documents</h2>
+    <label class="row">
+      <span>Default page size<small>Used for PDF and Word</small></span>
+      <select id="pageSize">
+        <option value="A4">A4</option>
+        <option value="Letter">Letter</option>
+        <option value="Legal">Legal</option>
+      </select>
+    </label>
+    <label class="row">
+      <span>Default format<small>Pre-selected in the export menu</small></span>
+      <select id="defaultFormat">
+        <option value="pdf">PDF</option>
+        <option value="docx">Word (.docx)</option>
+        <option value="md">Markdown</option>
+      </select>
+    </label>
+    <label class="row">
+      <span>Table of contents<small>Added automatically for threads with 4+ turns</small></span>
+      <select id="includeToc"><option value="true">On</option><option value="false">Off</option></select>
+    </label>
+    <label class="row">
+      <span>Embed images<small>Off exports alt text and links instead</small></span>
+      <select id="embedImages"><option value="true">On</option><option value="false">Off</option></select>
+    </label>
+  </section>
+
+  <section>
+    <h2>Claude-specific</h2>
+    <label class="row">
+      <span>Include artifacts<small>Open the artifact panel before exporting for full content</small></span>
+      <select id="includeArtifacts"><option value="true">On</option><option value="false">Off</option></select>
+    </label>
+    <label class="row">
+      <span>Include thinking blocks<small>Extended-thinking output, excluded by default</small></span>
+      <select id="includeThinking"><option value="false">Off</option><option value="true">On</option></select>
+    </label>
+  </section>
+
+  <section>
+    <h2>Diagnostics</h2>
+    <p class="sub" style="margin-bottom:12px">
+      Builds a local report of which selectors matched on the active tab. Nothing is sent anywhere —
+      copy it into a GitHub issue if an export breaks after a site update.
+    </p>
+    <button id="diagnose">Generate report</button>
+    <button id="copyReport" hidden>Copy</button>
+    <pre id="report" hidden></pre>
+  </section>
+
+  <button class="primary" id="save">Save settings</button>
+  <div id="status"></div>
+
+  <script src="options.js"></script>
+</body>
+</html>

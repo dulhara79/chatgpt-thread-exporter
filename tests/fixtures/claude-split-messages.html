@@ -1,0 +1,31 @@
+<!doctype html>
+<html><head><title>Patch review - Claude</title></head>
+<body>
+<div class="sticky top-0"><button data-testid="chat-menu-trigger">Patch review</button><button aria-label="Share">S</button></div>
+<main>
+  <!-- Real Claude wraps EACH message separately, not a Q&A pair. -->
+  <div data-test-render-count="1">
+    <div data-testid="user-message"><p>Review this patch please.</p>
+      <div data-testid="file-chip" aria-label="full-v0.6.1.patch">full-v0.6.1.patch
+        <pre>diff --git a/x b/x
++added line</pre>
+      </div>
+      <div data-testid="file-chip" aria-label="release.tar.gz">release.tar.gz</div>
+    </div>
+  </div>
+  <div data-test-render-count="2">
+    <div class="font-claude-response" data-is-streaming="false">
+      <div><p>The patch looks fine.</p></div>
+      <div class="flex" style="opacity:0"><button aria-label="Copy">c</button><button aria-label="Retry">r</button></div>
+    </div>
+  </div>
+  <div data-test-render-count="3">
+    <div data-testid="user-message"><p>And the second question?</p></div>
+  </div>
+  <div data-test-render-count="4">
+    <div class="font-claude-response" data-is-streaming="false">
+      <div><p>Second answer body.</p></div>
+    </div>
+  </div>
+</main>
+</body></html>

@@ -1,708 +1,746 @@
+/**
+ * Content script.
+ *
+ * Knows nothing about ChatGPT or Claude directly: everything site-specific
+ * comes from the platform adapter. UI lives in shadow roots so neither site's
+ * stylesheet can reach it and we need no `!important` wall.
+ */
 (() => {
   'use strict';
 
-  const ROLE_SELECTOR = '[data-message-author-role="user"], [data-message-author-role="assistant"]';
-  const ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
-  const EXPORT_BUTTON_CLASS = 'cgx-inline-export-button';
-  const THREAD_BUTTON_ID = 'cgx-thread-export-button';
-  const MENU_ID = 'cgx-export-menu';
-  const MAX_INLINE_SVG_CHARS = 1000000;
-  const exporter = globalThis.ChatGPTExporter;
+  const registry = globalThis.ThreadExporterRegistry;
+  const kit = globalThis.ThreadExporterAdapterKit;
+  const extractor = globalThis.ThreadExporterExtract;
+  const exporter = globalThis.ThreadExporter;
+  const IR = globalThis.ThreadExporterIR;
 
-  if (!exporter) {
-    console.error('[ChatGPT Thread Exporter] export engine did not load.');
+  if (!registry || !kit || !extractor || !exporter) {
+    console.error('[Thread Exporter] modules did not load.');
     return;
   }
 
-  function normalizeText(text) {
-    return exporter.normalizeText(text);
-  }
+  const adapter = registry.detect(location.href);
+  if (!adapter) return;
 
-  function visible(element) {
-    if (!(element instanceof Element)) return false;
-    const style = getComputedStyle(element);
-    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
-    const rect = element.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  }
+  const HOST_ATTR = 'data-cgx-ui';
+  const ANSWER_HOST_CLASS = 'cgx-answer-host';
+  const THREAD_HOST_ID = 'cgx-thread-host';
 
-  function markdownFromElement(root) {
-    if (!root) return '';
-    const clone = root.cloneNode(true);
+  const settings = {
+    pageSize: 'A4',
+    defaultFormat: 'pdf',
+    includeToc: true,
+    embedImages: true,
+    includeThinking: false,
+    includeArtifacts: true
+  };
 
-    clone.querySelectorAll(
-      `button, script, style, .${EXPORT_BUTTON_CLASS}, #${THREAD_BUTTON_ID}, [data-cgx-ui], ` +
-      '[data-testid*="copy"], [data-testid*="feedback"]'
-    ).forEach(el => el.remove());
-
-    function walk(node) {
-      if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || '';
-      if (node.nodeType !== Node.ELEMENT_NODE) return '';
-
-      const el = node;
-      const tag = el.tagName.toLowerCase();
-      const child = () => Array.from(el.childNodes).map(walk).join('');
-
-      if (tag === 'br') return '\n';
-      if (tag === 'hr') return '\n\n---\n\n';
-      if (tag === 'strong' || tag === 'b') return `**${child()}**`;
-      if (tag === 'em' || tag === 'i') return `*${child()}*`;
-      if (tag === 'del' || tag === 's') return `~~${child()}~~`;
-      if (tag === 'code' && el.parentElement?.tagName.toLowerCase() !== 'pre') {
-        return `\`${child().replace(/`/g, '\\`')}\``;
-      }
-      if (tag === 'pre') {
-        const codeEl = el.querySelector('code');
-        const code = codeEl?.innerText ?? el.innerText ?? '';
-        const cls = codeEl?.className || '';
-        const lang = cls.match(/language-([\w-]+)/i)?.[1] ||
-          el.getAttribute('data-language') || '';
-        return `\n\n\`\`\`${lang}\n${code.trimEnd()}\n\`\`\`\n\n`;
-      }
-      if (/^h[1-6]$/.test(tag)) {
-        return `\n\n${'#'.repeat(Number(tag[1]))} ${normalizeText(child())}\n\n`;
-      }
-      if (tag === 'blockquote') {
-        return `\n\n${normalizeText(child()).split('\n').map(line => `> ${line}`).join('\n')}\n\n`;
-      }
-      if (tag === 'a') {
-        const label = normalizeText(child()) || el.getAttribute('href') || '';
-        const href = el.getAttribute('href') || '';
-        return href && !href.startsWith('javascript:') ? `[${label}](${href})` : label;
-      }
-      if (tag === 'svg') {
-        const viewBox = String(el.getAttribute('viewBox') || '').trim().split(/[ ,]+/).map(Number);
-        const width = Number(el.getAttribute('width')) || (viewBox.length === 4 ? Math.abs(viewBox[2]) : 0);
-        const height = Number(el.getAttribute('height')) || (viewBox.length === 4 ? Math.abs(viewBox[3]) : 0);
-        const textCount = el.querySelectorAll('text, foreignObject').length;
-        const shapeCount = el.querySelectorAll('path, rect, circle, ellipse, polygon, polyline, line').length;
-        const meaningful = (width >= 160 && height >= 80) || textCount >= 2 || shapeCount >= 8;
-        if (!meaningful) return '';
-        try {
-          const serialized = new XMLSerializer().serializeToString(el);
-          if (serialized.length > MAX_INLINE_SVG_CHARS) {
-            return normalizeText(el.textContent || '') || '[Diagram omitted because it is too large to embed safely]';
-          }
-          const encoded = btoa(unescape(encodeURIComponent(serialized)));
-          return '![Diagram](data:image/svg+xml;base64,' + encoded + ')';
-        } catch {
-          return normalizeText(el.textContent || '');
-        }
-      }
-      if (tag === 'img') {
-        const meta = {
-          src: el.currentSrc || el.getAttribute('src') || '',
-          alt: el.getAttribute('alt') || el.getAttribute('aria-label') || 'Image',
-          width: el.naturalWidth || Number(el.getAttribute('width')) || el.getBoundingClientRect().width || 0,
-          height: el.naturalHeight || Number(el.getAttribute('height')) || el.getBoundingClientRect().height || 0,
-          className: String(el.className || ''),
-          role: el.getAttribute('role') || ''
-        };
-        if (!exporter.shouldIncludeImage(meta)) return '';
-        return meta.src ? '![' + meta.alt + '](' + meta.src + ')' : '[' + meta.alt + ']';
-      }
-      const mathClass = String(el.className || '').toLowerCase();
-      if (tag === 'math' || tag === 'mjx-container' || mathClass.includes('katex') || mathClass.includes('mathjax')) {
-        const annotation = el.querySelector('annotation[encoding="application/x-tex"], annotation[encoding="application/tex"]');
-        const tex = normalizeText(annotation?.textContent || el.getAttribute('data-tex') || el.getAttribute('data-latex') || el.getAttribute('aria-label') || el.textContent || '');
-        if (!tex) return '';
-        const dollar = String.fromCharCode(36);
-        const display = mathClass.includes('katex-display') || el.getAttribute('display') === 'block';
-        return display ? '\n\n' + dollar + dollar + tex + dollar + dollar + '\n\n' : dollar + tex + dollar;
-      }
-      if (tag === 'li') {
-        const parent = el.parentElement?.tagName.toLowerCase();
-        if (parent === 'ol') {
-          const siblings = Array.from(el.parentElement.children).filter(c => c.tagName?.toLowerCase() === 'li');
-          const start = Number(el.parentElement.getAttribute('start') || 1) || 1;
-          const explicit = el.getAttribute('value');
-          const index = explicit !== null ? Number(explicit) : start + siblings.indexOf(el);
-          return `${index}. ${normalizeText(child())}\n`;
-        }
-        return `- ${normalizeText(child())}\n`;
-      }
-      if (tag === 'ul' || tag === 'ol') return `\n${child()}\n`;
-      if (tag === 'p') return `${child()}\n\n`;
-      if (tag === 'table') {
-        const rows = Array.from(el.querySelectorAll('tr')).map(tr =>
-          Array.from(tr.querySelectorAll('th,td')).map(cell =>
-            normalizeText(cell.innerText).replace(/\|/g, '\\|')
-          )
-        );
-        if (!rows.length) return '';
-        const width = Math.max(...rows.map(r => r.length));
-        const padded = rows.map(r => [...r, ...Array(Math.max(0, width - r.length)).fill('')]);
-        const separator = Array(width).fill('---');
-        return `\n${[padded[0], separator, ...padded.slice(1)].map(r => `| ${r.join(' | ')} |`).join('\n')}\n\n`;
-      }
-      return child();
+  chrome.storage?.sync?.get(settings).then(stored => Object.assign(settings, stored || {})).catch(() => {});
+  chrome.storage?.onChanged?.addListener((changes, area) => {
+    if (area !== 'sync') return;
+    for (const [key, change] of Object.entries(changes)) {
+      if (key in settings) settings[key] = change.newValue;
     }
+  });
 
-    return normalizeText(walk(clone));
-  }
-
-  function findMessageBody(roleNode) {
-    const likely = roleNode.querySelector(
-      '.markdown, [class*="markdown"], [data-message-content], .prose, [class*="prose"]'
-    );
-    if (likely) return likely;
-
-    const candidates = Array.from(roleNode.querySelectorAll('div')).filter(el => {
-      const text = normalizeText(el.innerText);
-      return text.length > 0 && !el.querySelector(ROLE_SELECTOR) && !el.querySelector(`.${EXPORT_BUTTON_CLASS}`);
-    });
-    candidates.sort((a, b) => (b.innerText?.length || 0) - (a.innerText?.length || 0));
-    return candidates[0] || roleNode;
-  }
-
-  function messageFromNode(node) {
-    const role = node?.getAttribute('data-message-author-role');
-    if (role !== 'user' && role !== 'assistant') return null;
-    const body = findMessageBody(node);
-    const text = normalizeText(body?.innerText || node.innerText || '');
-    const markdown = markdownFromElement(body) || text;
-    if (!text && !markdown) return null;
-    return { role, text, markdown };
-  }
-
-  function getTitle() {
-    const cleaned = document.title.replace(/\s*[-–—|]\s*ChatGPT\s*$/i, '').trim();
-    if (cleaned && cleaned.toLowerCase() !== 'chatgpt') return cleaned;
-    const firstUser = document.querySelector('[data-message-author-role="user"]');
-    const text = normalizeText(firstUser?.innerText || '');
-    return text ? text.slice(0, 100) : 'ChatGPT Conversation';
-  }
-
-  function extractConversation() {
-    const nodes = Array.from(document.querySelectorAll(ROLE_SELECTOR));
-    const turns = [];
-    let pendingUser = null;
-    let answers = [];
-    let turnIndex = -1;
-
-    const flush = () => {
-      if (!pendingUser) return;
-      turns.push({
-        id: `turn-${turnIndex + 1}`,
-        index: turnIndex,
-        question: pendingUser,
-        answers: answers.length ? answers : [{ role: 'assistant', text: '', markdown: '' }]
-      });
-      pendingUser = null;
-      answers = [];
+  /** Options that every export format understands. */
+  function exportOptions(pageSize) {
+    return {
+      pageSize,
+      includeToc: settings.includeToc !== false,
+      embedImages: settings.embedImages !== false
     };
+  }
 
-    for (const node of nodes) {
-      const message = messageFromNode(node);
-      if (!message) continue;
-      if (message.role === 'user') {
-        flush();
-        turnIndex += 1;
-        pendingUser = message;
-        answers = [];
-      } else if (pendingUser) {
-        answers.push(message);
+  // ------------------------------------------------------------------
+  // Extraction
+  // ------------------------------------------------------------------
+
+  async function messageFrom(node, role) {
+    const body = adapter.messageBody(node) || node;
+    const isAssistant = role === 'assistant';
+
+    // Artifact bodies live in a side panel, so capturing them means opening
+    // each one. Only done for assistant messages, and only when enabled.
+    let artifacts = [];
+    if (isAssistant && settings.includeArtifacts !== false) {
+      artifacts = typeof adapter.captureArtifacts === 'function'
+        ? await adapter.captureArtifacts(node)
+        : adapter.artifacts(node);
+    }
+
+    const blocks = extractor.fromMessage(body, {
+      artifacts,
+      thinking: isAssistant ? adapter.thinkingBlocks(node) : [],
+      includeThinking: settings.includeThinking,
+      includeArtifacts: settings.includeArtifacts !== false
+    });
+    if (!blocks.length) return null;
+    return { role, blocks, text: IR.blocksToPlainText(blocks) };
+  }
+
+  /** A question we could not parse still beats dropping the turn entirely. */
+  function fallbackMessage(node, role) {
+    const text = extractor.preservedText
+      ? extractor.preservedText(node)
+      : (node?.textContent || '');
+    const clean = String(text || '').replace(/\u00a0/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+    if (!clean) return null;
+    return {
+      role,
+      blocks: [{ type: 'paragraph', inline: [{ type: 'text', text: clean }] }],
+      text: clean
+    };
+  }
+
+  /**
+   * Build one turn from a question node and its answer nodes.
+   *
+   * A turn survives if EITHER side has content. Previously a question that
+   * failed to parse — a long pasted block, an attachment-only message —
+   * discarded the answer with it, which is what produced
+   * "No question-and-answer content was found on this page."
+   */
+  async function turnFrom(group, index) {
+    const questionNode = group.question;
+    const answerNodes = group.answers || [];
+
+    let question = questionNode ? await messageFrom(questionNode, 'user') : null;
+
+    // A pasted block or attachment card sits outside the message body, so the
+    // body can parse to nothing while the message clearly has content. Read
+    // the whole node rather than exporting an empty question section.
+    if (questionNode && (!question || !question.text.trim())) {
+      question = fallbackMessage(questionNode, 'user') || question;
+    }
+
+    const answers = [];
+    for (const node of answerNodes) {
+      let message = await messageFrom(node, 'assistant');
+      if (!message) message = fallbackMessage(node, 'assistant');
+      if (message) answers.push(message);
+    }
+
+    // Attachments and pasted files sit outside the message body.
+    if (questionNode) {
+      const existing = question ? question.text : '';
+      const extras = attachmentBlocks(questionNode).filter(block => {
+        // Skip anything the question body already contains verbatim.
+        const text = IR.blocksToPlainText([block]).trim();
+        return text && !(text.length > 24 && existing.includes(text));
+      });
+      if (extras.length) {
+        if (question) question.blocks = question.blocks.concat(extras);
+        else question = { role: 'user', blocks: extras, text: IR.blocksToPlainText(extras) };
       }
     }
-    flush();
+
+    if (!question && !answers.length) return null;
 
     return {
-      title: getTitle(),
-      url: location.href,
-      exportedAt: new Date().toISOString(),
-      turns
+      id: 'turn-' + (index + 1),
+      index,
+      key: adapter.stableKey(questionNode || answerNodes[0]),
+      question: question || { role: 'user', blocks: [], text: '' },
+      answers: answers.length ? answers : [{ role: 'assistant', blocks: [], text: '' }]
     };
   }
 
-  function extractSingleTurn(assistantNode) {
-    const nodes = Array.from(document.querySelectorAll(ROLE_SELECTOR));
-    let lastUserNode = null;
-    let userIndex = -1;
+  async function turnsFromGroups(groups) {
+    const turns = [];
+    for (let index = 0; index < groups.length; index++) {
+      const turn = await turnFrom(groups[index], index);
+      if (turn) turns.push(turn);
+    }
+    return turns;
+  }
 
-    for (const node of nodes) {
-      const role = node.getAttribute('data-message-author-role');
-      if (role === 'user') {
-        lastUserNode = node;
-        userIndex += 1;
-      }
-      if (node === assistantNode) {
-        const question = messageFromNode(lastUserNode);
-        const answer = messageFromNode(assistantNode);
-        if (!question || !answer) throw new Error('Could not identify this question-and-answer pair.');
-        return {
-          title: getTitle(),
-          url: location.href,
-          exportedAt: new Date().toISOString(),
-          turns: [{
-            id: `turn-${userIndex + 1}`,
-            index: userIndex,
-            question,
-            answers: [answer]
+  const ARCHIVE_EXT = /\.(tar|tar\.gz|tgz|zip|gz|bz2|xz|7z|rar|exe|dll|bin|so|dylib|pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|webp|mp4|mp3|wav)$/i;
+
+  /**
+   * Blocks for files attached to a message.
+   *
+   * Text-like attachments (.py, .md, .html, .patch, .json ...) have their
+   * content in the DOM once expanded, so it is exported as a code block.
+   * Archives and binaries do not — their bytes are never in the page — so they
+   * are recorded by name instead of being silently dropped or half-rendered.
+   */
+  function attachmentBlocks(node) {
+    const blocks = [];
+    const seen = new Set();
+
+    for (const element of adapter.attachments(node) || []) {
+      const name = String(
+        element.getAttribute?.('data-filename') ||
+        element.getAttribute?.('aria-label') ||
+        element.querySelector?.('[class*="name" i], [class*="title" i]')?.textContent ||
+        element.textContent || ''
+      ).replace(/\s+/g, ' ').trim().slice(0, 120);
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+
+      const filename = (name.match(/[\w.-]+\.[A-Za-z0-9]{1,8}/) || [name])[0];
+
+      if (ARCHIVE_EXT.test(filename)) {
+        // The archive's bytes are not in the page; the extension cannot open
+        // it, so say so rather than emitting an empty or broken block.
+        blocks.push({
+          type: 'paragraph',
+          inline: [{
+            type: 'em',
+            children: [{ type: 'text', text: `Attachment: ${filename} (binary file, contents not available in the page)` }]
           }]
-        };
+        });
+        continue;
+      }
+
+      const pre = element.querySelector?.('pre');
+      const body = pre ? pre : element.querySelector?.('[class*="font-mono" i], [class*="content" i]');
+      const text = body ? extractor.preservedText(body) : '';
+
+      if (text.trim()) {
+        const lang = (filename.match(/\.([A-Za-z0-9]+)$/) || [, ''])[1].toLowerCase();
+        blocks.push({ type: 'heading', level: 4, inline: [{ type: 'text', text: 'Attachment: ' + filename }] });
+        blocks.push({ type: 'code', lang, text, diagram: false });
+      } else {
+        blocks.push({
+          type: 'paragraph',
+          inline: [{ type: 'em', children: [{ type: 'text', text: 'Attachment: ' + filename }] }]
+        });
       }
     }
-    throw new Error('Could not locate this answer in the current conversation.');
+
+    return blocks;
   }
 
-  function exportIconSvg(size = 18) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-      <path d="M12 3v11m0 0 4-4m-4 4-4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M5 14.5V19a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-    </svg>`;
+  function baseDocument() {
+    return {
+      title: adapter.conversationTitle(),
+      url: location.href,
+      platform: adapter.id,
+      platformLabel: adapter.label,
+      exportedAt: new Date().toISOString()
+    };
   }
 
-  function messageContainer(assistantNode) {
-    return assistantNode.closest('article, [data-testid^="conversation-turn"], [data-message-id]') ||
-      assistantNode.parentElement?.closest('article, [data-testid^="conversation-turn"], [data-message-id]') ||
-      assistantNode.parentElement;
-  }
+  /**
+   * Full-thread extraction. For a virtualized platform this scrolls the whole
+   * conversation into the DOM first and reports whether it managed to reach the
+   * top — a partial export must never be silent (F-04).
+   */
+  async function extractConversation(options = {}) {
+    let groups = kit.groupTurns(adapter.messages());
+    let complete = true;
 
-  function actionLabel(button) {
-    return normalizeText([
-      button.getAttribute('aria-label') || '',
-      button.getAttribute('title') || '',
-      button.getAttribute('data-testid') || '',
-      button.innerText || ''
-    ].join(' ')).toLowerCase();
-  }
-
-  function findActionToolbar(assistantNode) {
-    const container = messageContainer(assistantNode);
-    if (!container || !visible(container)) return null;
-
-    const buttons = Array.from(container.querySelectorAll('button')).filter(button =>
-      visible(button) &&
-      !button.closest('[data-cgx-ui]') &&
-      !button.closest('pre, code, .markdown, [class*="markdown"]') &&
-      !button.classList.contains(EXPORT_BUTTON_CLASS)
-    );
-    if (!buttons.length) return null;
-
-    const known = buttons.find(button => /^(copy|read aloud|good response|bad response|regenerate|retry|more)(\b|\s|$)/.test(actionLabel(button)));
-    const seeds = known ? [known, ...buttons] : buttons;
-    let best = null;
-    let bestScore = -Infinity;
-
-    for (const seed of seeds) {
-      let current = seed.parentElement;
-      let depth = 0;
-      while (current && current !== container && depth < 5) {
-        if (!visible(current) || current.closest('pre, code')) {
-          current = current.parentElement;
-          depth += 1;
-          continue;
-        }
-        const allButtons = Array.from(current.querySelectorAll('button')).filter(button =>
-          visible(button) && !button.closest('[data-cgx-ui]') && !button.closest('pre, code')
-        );
-        const count = allButtons.length;
-        if (count >= 1 && count <= 12) {
-          const rect = current.getBoundingClientRect();
-          const answerRect = assistantNode.getBoundingClientRect();
-          let score = 20 - depth;
-          if (known && current.contains(known)) score += 40;
-          if (rect.top >= answerRect.top) score += 10;
-          if (count >= 2 && count <= 8) score += 10;
-          if (score > bestScore) { best = current; bestScore = score; }
-        }
-        current = current.parentElement;
-        depth += 1;
-      }
+    if (adapter.virtualized) {
+      const harvest = await adapter.ensureFullyLoaded({ onProgress: options.onProgress });
+      if (harvest.turns?.length) groups = harvest.turns;
+      complete = harvest.complete;
     }
-    return best && visible(best) ? { toolbar: best, container } : null;
+
+    const turns = await turnsFromGroups(groups);
+    return { ...baseDocument(), turns, complete };
   }
 
-  function createOwnedButton(className, label, iconSize, withText = false) {
+  /**
+   * Export specific turns.
+   *
+   * Takes the elements themselves rather than re-resolving them by key: the
+   * old key round-trip failed whenever the page re-rendered between opening
+   * the menu and clicking a format, which on Claude is most of the time.
+   * Keys are only used to recover the turn's position in the thread, and a
+   * detached element still yields correct content because we hold a reference
+   * to its subtree.
+   */
+  async function extractTurns(entries) {
+    const live = kit.groupTurns(adapter.messages());
+    const resolved = [];
+
+    for (const entry of entries) {
+      // Prefer the live group, so a re-render between opening the menu and
+      // choosing a format cannot lose the answers.
+      let group = live.find(candidate =>
+        candidate.question === entry.container ||
+        candidate.answers.includes(entry.container));
+
+      if (!group) {
+        group = live.find(candidate => {
+          const anchor = candidate.question || candidate.answers[0];
+          return anchor && adapter.stableKey(anchor) === entry.key;
+        });
+      }
+      // Fall back to the captured group: a detached subtree still has content.
+      if (!group) group = entry.group;
+      if (!group) continue;
+
+      const position = live.indexOf(group);
+      resolved.push({ group, index: position >= 0 ? position : entry.index });
+    }
+
+    if (!resolved.length) {
+      throw new Error('Could not read this answer from the page. Reload the conversation and try again.');
+    }
+
+    resolved.sort((a, b) => a.index - b.index);
+    const turns = [];
+    for (const item of resolved) {
+      const turn = await turnFrom(item.group, item.index);
+      if (turn) turns.push(turn);
+    }
+
+    if (!turns.length) {
+      throw new Error('Could not read any content from this answer. Reload the conversation and try again.');
+    }
+    return { ...baseDocument(), turns, complete: true };
+  }
+
+  // ------------------------------------------------------------------
+  // Shadow-DOM UI
+  // ------------------------------------------------------------------
+
+  const CONTROL_CSS = `
+    :host { all: initial; display: inline-flex; vertical-align: middle; font-family: ui-sans-serif, -apple-system, "Segoe UI", sans-serif; }
+    button {
+      display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+      font: 600 12.5px/1 ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
+      color: #0f172a; background: #ffffff; border: 1px solid rgba(15,23,42,.16);
+      border-radius: 8px; padding: 6px 10px; min-height: 30px;
+      transition: background-color .15s ease, border-color .15s ease;
+    }
+    button:hover:not(:disabled) { background: #f1f5f9; border-color: rgba(15,23,42,.28); }
+    button:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+    button:disabled { opacity: .55; cursor: default; }
+    button.selected { background: #e0ecff; border-color: #2563eb; }
+    svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    @media (prefers-color-scheme: dark) {
+      button { color: #e2e8f0; background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.16); }
+      button:hover:not(:disabled) { background: rgba(255,255,255,.12); }
+      button.selected { background: rgba(59,130,246,.28); border-color: #60a5fa; }
+    }
+  `;
+
+  const EXPORT_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4"/><path d="M5 14.5V19a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4.5"/></svg>';
+
+  function createControlHost(tagClass) {
+    const host = document.createElement('span');
+    host.className = tagClass;
+    host.setAttribute(HOST_ATTR, 'true');
+    const shadow = host.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = CONTROL_CSS;
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = className;
-    button.setAttribute('data-cgx-ui', 'true');
-    button.setAttribute('aria-label', label);
-    button.setAttribute('title', label);
-    button.setAttribute('aria-disabled', 'false');
-    button.disabled = false;
-    button.tabIndex = 0;
-    button.innerHTML = exportIconSvg(iconSize) + (withText ? '<span class="cgx-thread-label">Export</span>' : '');
-    return button;
+    shadow.append(style, button);
+    return { host, shadow, button };
   }
 
-  function turnKeyForAssistant(assistantNode) {
-    const container = messageContainer(assistantNode);
-    const messageId = container?.getAttribute?.('data-message-id') || assistantNode.getAttribute('data-message-id');
-    if (messageId) return 'message:' + messageId;
-    const testId = container?.getAttribute?.('data-testid');
-    if (testId) return 'testid:' + testId;
-    const assistants = Array.from(document.querySelectorAll(ASSISTANT_SELECTOR));
-    return 'index:' + Math.max(0, assistants.indexOf(assistantNode));
-  }
+  // ------------------------------------------------------------------
+  // Per-answer control
+  // ------------------------------------------------------------------
 
-  function resolveAssistantByKey(key) {
-    if (!key) return null;
-    for (const assistant of document.querySelectorAll(ASSISTANT_SELECTOR)) {
-      if (turnKeyForAssistant(assistant) === key) return assistant;
+  /** Turns marked for a range export (shift-click), keyed for de-duplication. */
+  const selection = new Map();
+
+  /**
+   * Place the control immediately after the last answer of the turn.
+   *
+   * Anchoring on the answer element rather than on a turn container puts the
+   * button in the same visual position on both platforms — the end of the
+   * answer — and works on Claude, where a user message and its answer do not
+   * share a wrapper.
+   */
+  function footerRowFor(lastAnswer, key) {
+    const parent = lastAnswer.parentElement;
+    if (!parent) return null;
+
+    const existing = Array.from(parent.querySelectorAll(':scope > .cgx-answer-row'))
+      .find(row => row.dataset.cgxKey === key);
+    if (existing) {
+      // Keep it directly after the answer even if the site reordered children.
+      if (existing.previousElementSibling !== lastAnswer) {
+        lastAnswer.insertAdjacentElement('afterend', existing);
+      }
+      return existing;
     }
-    return null;
-  }
 
-  function createInlineExportButton(turnKey) {
-    const button = createOwnedButton(EXPORT_BUTTON_CLASS, 'Export this question and answer', 18, false);
-    button.dataset.cgxTurnKey = turnKey;
-    button.addEventListener('click', event => {
-      event.preventDefault();
-      event.stopPropagation();
-      showExportMenu(button, 'Export this Q&A', () => {
-        const currentAssistant = resolveAssistantByKey(button.dataset.cgxTurnKey);
-        if (!currentAssistant) throw new Error('This answer changed while the export menu was open. Please try again.');
-        return extractSingleTurn(currentAssistant);
-      });
-    });
-    return button;
-  }
-
-  function ensureFallbackRow(container, assistantNode, turnKey) {
-    let row = Array.from(container.querySelectorAll('.cgx-fallback-actions[data-cgx-answer-actions]'))
-      .find(candidate => candidate.dataset.cgxTurnKey === turnKey);
-    if (!row) {
-      row = document.createElement('div');
-      row.className = 'cgx-fallback-actions';
-      row.setAttribute('data-cgx-ui', 'true');
-      row.setAttribute('data-cgx-answer-actions', 'true');
-      row.dataset.cgxTurnKey = turnKey;
-      const body = findMessageBody(assistantNode);
-      const placement = body?.parentElement && container.contains(body.parentElement) ? body.parentElement : assistantNode;
-      if (placement?.parentElement) placement.insertAdjacentElement('afterend', row);
-      else container.appendChild(row);
-    }
+    const row = document.createElement('div');
+    row.className = 'cgx-answer-row';
+    row.setAttribute(HOST_ATTR, 'true');
+    row.dataset.cgxKey = key;
+    row.style.cssText = 'display:flex;justify-content:flex-start;align-items:center;gap:8px;margin:2px 0 10px;';
+    lastAnswer.insertAdjacentElement('afterend', row);
     return row;
   }
 
-  function decorateAnswer(assistantNode) {
-    if (!(assistantNode instanceof Element) || !assistantNode.isConnected) return;
-    const container = messageContainer(assistantNode);
-    if (!container) return;
+  function decorateTurn(group, index = -1) {
+    const answers = group?.answers || [];
+    if (!answers.length) return;
 
-    const turnKey = turnKeyForAssistant(assistantNode);
-    const buttons = Array.from(container.querySelectorAll('.' + EXPORT_BUTTON_CLASS));
-    let existing = buttons.find(button => button.dataset.cgxTurnKey === turnKey) || null;
-    buttons.forEach(button => {
-      if (button !== existing && button.dataset.cgxTurnKey === turnKey) button.remove();
-    });
+    const lastAnswer = answers[answers.length - 1];
+    if (!(lastAnswer instanceof Element) || !lastAnswer.isConnected) return;
 
-    const found = findActionToolbar(assistantNode);
-    if (!existing) existing = createInlineExportButton(turnKey);
+    const anchor = group.question || lastAnswer;
+    const key = adapter.stableKey(anchor);
+    const row = footerRowFor(lastAnswer, key);
+    if (!row) return;
 
-    if (found?.toolbar && visible(found.toolbar)) {
-      if (existing.parentElement !== found.toolbar) found.toolbar.appendChild(existing);
-      container.querySelectorAll('.cgx-fallback-actions[data-cgx-answer-actions]').forEach(row => {
-        if (row.dataset.cgxTurnKey === turnKey && !row.children.length) row.remove();
-      });
-    } else {
-      const fallback = ensureFallbackRow(container, assistantNode, turnKey);
-      if (existing.parentElement !== fallback) fallback.appendChild(existing);
-    }
-  }
+    let control = row.querySelector('.' + ANSWER_HOST_CLASS);
+    if (!control) {
+      const created = createControlHost(ANSWER_HOST_CLASS);
+      control = created.host;
+      control.__cgx = created;
+      row.appendChild(control);
 
-  function decorateAnswers(root = document) {
-    const assistants = new Set();
-    if (root instanceof Element && root.matches(ASSISTANT_SELECTOR)) assistants.add(root);
-    if (root?.querySelectorAll) root.querySelectorAll(ASSISTANT_SELECTOR).forEach(node => assistants.add(node));
-    assistants.forEach(decorateAnswer);
-  }
-
-  function findShareButton() {
-    const directSelectors = [
-      '[data-testid="share-chat-button"]',
-      'button[data-testid="share-chat-button"]',
-      'button[aria-label="Share"]',
-      'button[aria-label*="Share conversation" i]',
-      'button[title="Share"]'
-    ];
-    for (const selector of directSelectors) {
-      const candidate = document.querySelector(selector);
-      const button = candidate?.matches?.('button') ? candidate : candidate?.querySelector?.('button');
-      if (button && visible(button) && !button.closest('article')) return button;
-    }
-
-    let best = null;
-    let bestScore = -1;
-    for (const button of document.querySelectorAll('button')) {
-      if (!visible(button) || button.closest('article') || button.id === THREAD_BUTTON_ID || button.closest('[data-cgx-ui]')) continue;
-      const rect = button.getBoundingClientRect();
-      if (rect.top > 180) continue;
-      const combined = actionLabel(button);
-      if (!combined.includes('share')) continue;
-      let score = 20;
-      if (rect.top < 100) score += 20;
-      if (rect.right > innerWidth * 0.65) score += 15;
-      if (score > bestScore) { best = button; bestScore = score; }
-    }
-    return best;
-  }
-
-  function findHeaderActionFallback() {
-    const candidates = [];
-    for (const element of document.querySelectorAll('header, nav, [role="banner"], main > div')) {
-      if (!(element instanceof Element)) continue;
-      const rect = element.getBoundingClientRect();
-      if (rect.top > 140 || rect.bottom > 240 || rect.width < 240) continue;
-      const buttons = Array.from(element.querySelectorAll('button')).filter(button => visible(button) && !button.closest('article') && !button.closest('[data-cgx-ui]'));
-      if (!buttons.length || buttons.length > 16) continue;
-      const right = Math.max(...buttons.map(button => button.getBoundingClientRect().right));
-      candidates.push({ element, score: right + (rect.top < 90 ? 300 : 0) });
-    }
-    candidates.sort((a, b) => b.score - a.score);
-    return candidates[0] || null;
-  }
-
-  function sharePlacementUnit(shareButton) {
-    if (!shareButton) return null;
-    const testIdWrapper = shareButton.closest('[data-testid="share-chat-button"]');
-    if (testIdWrapper && testIdWrapper !== shareButton && testIdWrapper.parentElement) return testIdWrapper;
-    return shareButton;
-  }
-
-  function createThreadExportButton() {
-    const button = createOwnedButton('cgx-thread-export-button', 'Export entire conversation', 17, true);
-    button.id = THREAD_BUTTON_ID;
-    button.addEventListener('click', event => {
-      event.preventDefault();
-      event.stopPropagation();
-      showExportMenu(button, 'Export entire conversation', () => extractConversation());
-    });
-    return button;
-  }
-
-  function decorateThreadHeader() {
-    let button = document.getElementById(THREAD_BUTTON_ID);
-    const shareButton = findShareButton();
-    if (!button) button = createThreadExportButton();
-
-    if (shareButton) {
-      const unit = sharePlacementUnit(shareButton);
-      if (unit?.parentElement) {
-        if (button.parentElement !== unit.parentElement || button.nextElementSibling !== unit) unit.parentElement.insertBefore(button, unit);
-        return;
-      }
-    }
-
-    if (button.isConnected && visible(button)) return;
-    if (button.isConnected) button.remove();
-    const fallback = findHeaderActionFallback();
-    if (fallback) fallback.element.appendChild(button);
-  }
-
-  let activeMenuAbort = null;
-
-  function closeMenu(menu = null) {
-    const current = document.getElementById(MENU_ID);
-    if (menu && current && menu !== current) return;
-    if (activeMenuAbort) {
-      activeMenuAbort.abort();
-      activeMenuAbort = null;
-    }
-    (menu || current)?.remove();
-  }
-
-  function positionMenu(menu, anchor) {
-    const rect = anchor.getBoundingClientRect();
-    const menuRect = menu.getBoundingClientRect();
-    const margin = 8;
-    let left = rect.left;
-    let top = rect.bottom + margin;
-
-    if (left + menuRect.width > innerWidth - margin) left = innerWidth - menuRect.width - margin;
-    if (left < margin) left = margin;
-    if (top + menuRect.height > innerHeight - margin) top = Math.max(margin, rect.top - menuRect.height - margin);
-
-    menu.style.left = `${Math.round(left)}px`;
-    menu.style.top = `${Math.round(top)}px`;
-  }
-
-  function formatIcon(format) {
-    const common = 'viewBox="0 0 24 24" aria-hidden="true" focusable="false"';
-    if (format === 'pdf') {
-      return '<span class="cgx-format-icon cgx-format-pdf"><svg ' + common + '><path d="M6.75 2.75h7.2L18.5 7.3v13.95H6.75z"/><path d="M13.95 2.75V7.3h4.55"/><path d="M8.8 14.75h6.4M8.8 17.25h4.7"/></svg></span>';
-    }
-    if (format === 'docx') {
-      return '<span class="cgx-format-icon cgx-format-docx"><svg ' + common + '><path d="M7.1 2.75h7.1l4.25 4.25v14.25H7.1z"/><path d="M14.2 2.75V7h4.25"/><path d="M4.1 9.2h6.9v9.2H4.1z"/><path d="m5.6 11 1.25 5.5 1.2-3.75 1.2 3.75L10.5 11"/></svg></span>';
-    }
-    return '<span class="cgx-format-icon cgx-format-md"><svg ' + common + '><path d="M5.5 3.25h13v17.5h-13z"/><path d="M8 9.1v5.8M8 9.1l2.1 2.7 2.1-2.7v5.8M14.1 11.1l1.9 2.25 1.9-2.25M16 13.35V9.1"/></svg></span>';
-  }
-
-  function showExportMenu(anchor, heading, dataProvider) {
-    closeMenu();
-
-    const menu = document.createElement('div');
-    menu.id = MENU_ID;
-    menu.className = 'cgx-export-menu';
-    menu.setAttribute('data-cgx-ui', 'true');
-    menu.setAttribute('role', 'menu');
-    menu.innerHTML = `
-      <div class="cgx-menu-heading">${heading}</div>
-      <label class="cgx-page-size"><span>Page size</span><select data-page-size aria-label="Document page size"><option value="A4" selected>A4 (default)</option><option value="Letter">Letter</option><option value="Legal">Legal</option></select></label>
-      <button type="button" data-format="pdf" role="menuitem">${formatIcon('pdf')}<span><strong>PDF document</strong><small>Professional print-ready document</small></span></button>
-      <button type="button" data-format="docx" role="menuitem">${formatIcon('docx')}<span><strong>Microsoft Word</strong><small>Editable .docx with native numbering</small></span></button>
-      <button type="button" data-format="md" role="menuitem">${formatIcon('md')}<span><strong>Markdown</strong><small>Clean semantic .md file</small></span></button>`;
-
-    document.body.appendChild(menu);
-    positionMenu(menu, anchor);
-
-    const menuAbort = new AbortController();
-    activeMenuAbort = menuAbort;
-
-    menu.querySelectorAll('button[data-format]').forEach(button => {
-      button.addEventListener('click', async event => {
+      created.button.addEventListener('click', event => {
         event.preventDefault();
         event.stopPropagation();
-        const format = button.dataset.format;
+        const entry = control.__cgxEntry;
+        if (!entry) return;
+
+        if (event.shiftKey) {
+          if (selection.has(entry.key)) selection.delete(entry.key);
+          else selection.set(entry.key, entry);
+          refreshSelectionStyles();
+          return;
+        }
+
+        const entries = selection.size ? Array.from(selection.values()) : [entry];
+        const heading = entries.length > 1
+          ? `Export ${entries.length} selected Q&A turns`
+          : 'Export this Q&A';
+        openMenu(control, heading, () => extractTurns(entries));
+      });
+    }
+
+    control.dataset.cgxKey = key;
+    // Hold the group itself; re-resolving by key alone was the failure mode.
+    control.__cgxEntry = { container: anchor, group, key, index };
+    if (selection.has(key)) selection.set(key, control.__cgxEntry);
+    const { button } = control.__cgx;
+    const streaming = answers.some(node => adapter.isStreaming(node));
+
+    button.disabled = streaming;
+    button.setAttribute('aria-disabled', String(streaming));
+    button.title = streaming
+      ? 'Wait for the answer to finish generating'
+      : 'Export this question and answer (shift-click to select a range)';
+    button.setAttribute('aria-label', button.title);
+    button.innerHTML = EXPORT_ICON + '<span>' + (streaming ? 'Generating…' : 'Export') + '</span>';
+    button.classList.toggle('selected', selection.has(key));
+  }
+
+  function refreshSelectionStyles() {
+    for (const host of document.querySelectorAll('.' + ANSWER_HOST_CLASS)) {
+      const button = host.__cgx?.button;
+      if (button) button.classList.toggle('selected', selection.has(host.dataset.cgxKey));
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Thread control
+  // ------------------------------------------------------------------
+
+  function decorateThread() {
+    const anchor = adapter.headerAnchor();
+    let host = document.getElementById(THREAD_HOST_ID);
+
+    if (!host) {
+      const created = createControlHost('cgx-thread-host');
+      host = created.host;
+      host.id = THREAD_HOST_ID;
+      host.__cgx = created;
+      host.style.marginRight = '6px';
+      created.button.innerHTML = EXPORT_ICON + '<span>Export chat</span>';
+      created.button.title = 'Export the entire conversation';
+      created.button.setAttribute('aria-label', created.button.title);
+      created.button.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        selection.clear();
+        refreshSelectionStyles();
+        openMenu(host, 'Export entire conversation', progress => extractConversation({ onProgress: progress }));
+      });
+    }
+
+    if (anchor?.parentElement && anchor.isConnected) {
+      host.style.position = '';
+      host.style.inset = '';
+      host.style.zIndex = '';
+      if (host.nextElementSibling !== anchor) anchor.parentElement.insertBefore(host, anchor);
+      return;
+    }
+
+    // No usable header anchor. Appending to <body> put the button at the very
+    // bottom of the page, where it looked like it had simply not appeared, so
+    // pin it instead — always visible, never in the message flow.
+    host.style.position = 'fixed';
+    host.style.top = '12px';
+    host.style.right = '76px';
+    host.style.zIndex = '2147483646';
+    if (host.parentElement !== document.body) document.body.appendChild(host);
+  }
+
+  // ------------------------------------------------------------------
+  // Menu + toast
+  // ------------------------------------------------------------------
+
+  const MENU_CSS = `
+    :host { all: initial; position: fixed; z-index: 2147483647; font-family: ui-sans-serif, -apple-system, "Segoe UI", sans-serif; }
+    .menu { min-width: 268px; background: #fff; color: #0f172a; border: 1px solid rgba(15,23,42,.14);
+      border-radius: 12px; box-shadow: 0 12px 32px rgba(15,23,42,.18); padding: 8px; }
+    .heading { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #64748b; padding: 6px 8px 8px; }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px 8px; font-size: 12px; color: #475569; }
+    select { font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid rgba(15,23,42,.18); background: #fff; color: inherit; }
+    button.item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; cursor: pointer;
+      background: transparent; border: 0; border-radius: 8px; padding: 8px; color: inherit; font: inherit; }
+    button.item:hover:not(:disabled) { background: #f1f5f9; }
+    button.item:disabled { opacity: .5; cursor: default; }
+    button.item strong { display: block; font-size: 13px; }
+    button.item small { display: block; font-size: 11px; color: #64748b; }
+    .warn { margin: 4px 8px 8px; padding: 6px 8px; border-radius: 6px; background: #fef3c7; color: #92400e; font-size: 11.5px; }
+    @media (prefers-color-scheme: dark) {
+      .menu { background: #1e293b; color: #e2e8f0; border-color: rgba(255,255,255,.14); }
+      button.item:hover:not(:disabled) { background: rgba(255,255,255,.08); }
+      select { background: #0f172a; border-color: rgba(255,255,255,.2); }
+      .warn { background: #422006; color: #fde68a; }
+    }
+  `;
+
+  let menuHost = null;
+  let menuAbort = null;
+
+  function closeMenu() {
+    menuAbort?.abort();
+    menuAbort = null;
+    menuHost?.remove();
+    menuHost = null;
+  }
+
+  function openMenu(anchorHost, heading, provider) {
+    closeMenu();
+
+    menuHost = document.createElement('div');
+    menuHost.setAttribute(HOST_ATTR, 'true');
+    const shadow = menuHost.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = MENU_CSS;
+
+    const formatItems = {
+      pdf: '<button class="item" data-format="pdf" role="menuitem"><span><strong>PDF document</strong><small>Print-ready, selectable text</small></span></button>',
+      docx: '<button class="item" data-format="docx" role="menuitem"><span><strong>Microsoft Word</strong><small>Editable .docx with real list numbering</small></span></button>',
+      md: '<button class="item" data-format="md" role="menuitem"><span><strong>Markdown</strong><small>Clean semantic .md file</small></span></button>'
+    };
+    const order = [settings.defaultFormat, 'pdf', 'docx', 'md']
+      .filter((format, index, all) => formatItems[format] && all.indexOf(format) === index);
+
+    const menu = document.createElement('div');
+    menu.className = 'menu';
+    menu.setAttribute('role', 'menu');
+    menu.innerHTML =
+      `<div class="heading">${heading}</div>` +
+      '<div class="row"><span>Page size</span><select data-page-size>' +
+      ['A4', 'Letter', 'Legal'].map(size =>
+        `<option value="${size}"${size === settings.pageSize ? ' selected' : ''}>${size}</option>`).join('') +
+      '</select></div>' +
+      order.map(format => formatItems[format]).join('') +
+      '<button class="item" data-format="copy" role="menuitem"><span><strong>Copy as Markdown</strong><small>Straight to the clipboard</small></span></button>';
+
+    shadow.append(style, menu);
+    document.body.appendChild(menuHost);
+
+    const rect = anchorHost.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    let left = Math.min(rect.left, innerWidth - menuRect.width - 8);
+    let top = rect.bottom + 8;
+    if (top + menuRect.height > innerHeight - 8) top = Math.max(8, rect.top - menuRect.height - 8);
+    menuHost.style.left = Math.round(Math.max(8, left)) + 'px';
+    menuHost.style.top = Math.round(top) + 'px';
+
+    menuAbort = new AbortController();
+
+    menu.querySelectorAll('button[data-format]').forEach(item => {
+      item.addEventListener('click', async event => {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const format = item.dataset.format;
         const pageSize = menu.querySelector('[data-page-size]')?.value || 'A4';
+        settings.pageSize = pageSize;
+        chrome.storage?.sync?.set({ pageSize }).catch(() => {});
+
+        const label = item.querySelector('strong');
+        const original = label.textContent;
+        const items = menu.querySelectorAll('button[data-format]');
+        items.forEach(other => { other.disabled = true; });
+
+        const setStage = text => { label.textContent = text; };
+
         try {
-          const data = dataProvider();
-          if (!data?.turns?.length) throw new Error('No question-and-answer content was found.');
+          const data = await provider(progress => {
+            if (progress?.stage === 'harvest') setStage(`Loading conversation… ${progress.turns} turns`);
+          });
+          if (!data?.turns?.length) throw new Error('No question-and-answer content was found on this page.');
+
+          if (data.complete === false) {
+            const warn = document.createElement('div');
+            warn.className = 'warn';
+            warn.textContent = `Only ${data.turns.length} turns could be loaded from this thread. Scroll to the top and retry for a complete export.`;
+            menu.appendChild(warn);
+          }
 
           if (format === 'pdf') {
-            const strong = button.querySelector('strong');
-            const originalLabel = strong?.textContent || 'PDF document';
-            menu.querySelectorAll('button[data-format]').forEach(item => { item.disabled = true; });
-            button.classList.add('cgx-export-busy');
-            if (strong) strong.textContent = 'Preparing PDF…';
-            try {
-              await exporter.exportPdf(data, data.turns, {
-                pageSize,
-                onProgress: progress => {
-                  if (!strong) return;
-                  const labels = {
-                    preflight: 'Checking PDF…',
-                    transfer: 'Sending to renderer…',
-                    rendering: 'Rendering PDF…',
-                    fonts: 'Loading fonts…',
-                    assets: 'Preparing media…',
-                    layout: 'Laying out pages…',
-                    'blob-ready': 'Opening Save As…',
-                    download: 'Opening Save As…'
-                  };
-                  strong.textContent = labels[progress?.stage] || 'Rendering PDF…';
-                }
-              });
-            } finally {
-              button.classList.remove('cgx-export-busy');
-              if (strong) strong.textContent = originalLabel;
-            }
+            const stages = {
+              preflight: 'Checking PDF…', transfer: 'Sending to renderer…', rendering: 'Rendering PDF…',
+              fonts: 'Loading fonts…', assets: 'Preparing media…', layout: 'Laying out pages…',
+              'blob-ready': 'Opening Save As…', downloading: 'Opening Save As…', download: 'Opening Save As…'
+            };
+            await exporter.exportPdf(data, data.turns, {
+              ...exportOptions(pageSize),
+              onProgress: progress => setStage(stages[progress?.stage] || 'Rendering PDF…')
+            });
           } else if (format === 'docx') {
-            await exporter.exportDocx(data, data.turns, { pageSize });
+            setStage('Building document…');
+            await exporter.exportDocx(data, data.turns, exportOptions(pageSize));
+          } else if (format === 'copy') {
+            await exporter.copyMarkdown(data, data.turns);
           } else {
             exporter.exportMarkdown(data, data.turns);
           }
 
-          closeMenu(menu);
-          showToast(format === 'pdf' ? 'PDF Save As opened.' : 'Exported ' + (format === 'docx' ? 'Word document (' + pageSize + ')' : 'Markdown file') + '.');
+          const suffix = data.complete === false ? ' (partial)' : '';
+          closeMenu();
+          selection.clear();
+          refreshSelectionStyles();
+          toast(
+            format === 'pdf' ? 'PDF Save As opened' + suffix + '.'
+              : format === 'copy' ? 'Markdown copied to the clipboard' + suffix + '.'
+                : `Exported ${data.turns.length} turn(s) as ${format === 'docx' ? 'Word' : 'Markdown'}${suffix}.`
+          );
         } catch (error) {
-          closeMenu(menu);
-          showToast(error?.message || String(error), true);
+          label.textContent = original;
+          items.forEach(other => { other.disabled = false; });
+          closeMenu();
+          toast(error?.message || String(error), true);
         }
-      });
+      }, { signal: menuAbort.signal });
     });
 
     requestAnimationFrame(() => {
-      const outside = event => {
-        if (!menu.contains(event.target) && event.target !== anchor && !anchor.contains(event.target)) {
-          closeMenu(menu);
-        }
-      };
-      document.addEventListener('pointerdown', outside, { capture: true, signal: menuAbort.signal });
-      window.addEventListener('scroll', () => closeMenu(menu), { once: true, capture: true, signal: menuAbort.signal });
-      window.addEventListener('resize', () => closeMenu(menu), { once: true, signal: menuAbort.signal });
+      if (!menuAbort) return;
+      document.addEventListener('pointerdown', event => {
+        if (!menuHost?.contains(event.target) && !anchorHost.contains(event.target)) closeMenu();
+      }, { capture: true, signal: menuAbort.signal });
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') closeMenu();
+      }, { signal: menuAbort.signal });
+      window.addEventListener('resize', closeMenu, { once: true, signal: menuAbort.signal });
     });
   }
 
-  function showToast(message, error = false) {
-    document.querySelector('.cgx-toast')?.remove();
-    const toast = document.createElement('div');
-    toast.className = `cgx-toast${error ? ' cgx-toast-error' : ''}`;
-    toast.setAttribute('data-cgx-ui', 'true');
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    requestAnimationFrame(() => toast.classList.add('cgx-toast-visible'));
-    setTimeout(() => {
-      toast.classList.remove('cgx-toast-visible');
-      setTimeout(() => toast.remove(), 180);
-    }, 3200);
+  function toast(message, isError = false) {
+    document.querySelector('.cgx-toast-host')?.remove();
+    const host = document.createElement('div');
+    host.className = 'cgx-toast-host';
+    host.setAttribute(HOST_ATTR, 'true');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML =
+      '<style>:host{all:initial;position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:2147483647;}' +
+      '.t{font:500 13px/1.4 ui-sans-serif,-apple-system,"Segoe UI",sans-serif;padding:10px 16px;border-radius:10px;' +
+      'box-shadow:0 8px 24px rgba(15,23,42,.22);max-width:min(560px,90vw);}' +
+      `.t{background:${isError ? '#7f1d1d' : '#0f172a'};color:#fff;}</style>` +
+      `<div class="t"></div>`;
+    shadow.querySelector('.t').textContent = message;
+    document.body.appendChild(host);
+    setTimeout(() => host.remove(), isError ? 6000 : 3400);
   }
 
-  const pendingAnswerRoots = new Set();
-  let fullDecorationRequested = false;
-  let decorateFrame = 0;
-  let decorateDeadline = 0;
+  // ------------------------------------------------------------------
+  // Scheduling
+  // ------------------------------------------------------------------
 
-  function queueAnswerRoot(node) {
-    if (!(node instanceof Element)) return;
-    const assistant = node.matches(ASSISTANT_SELECTOR) ? node : node.closest?.(ASSISTANT_SELECTOR);
-    if (assistant) {
-      pendingAnswerRoots.add(assistant);
-      return;
-    }
-    const container = node.closest?.('article, [data-testid^="conversation-turn"], [data-message-id]');
-    const containedAssistant = container?.querySelector?.(ASSISTANT_SELECTOR);
-    if (containedAssistant) pendingAnswerRoots.add(containedAssistant);
-    node.querySelectorAll?.(ASSISTANT_SELECTOR).forEach(item => pendingAnswerRoots.add(item));
+  const pending = new Set();
+  let fullPass = false;
+  let frame = 0;
+  let deadline = 0;
+
+  function flush() {
+    if (frame) cancelAnimationFrame(frame);
+    if (deadline) clearTimeout(deadline);
+    frame = 0;
+    deadline = 0;
+
+    // Decoration always works from the full group list: a turn's answers can
+    // live outside the mutated subtree, so a partial pass would miss them.
+    const groups = kit.groupTurns(adapter.messages());
+    pending.clear();
+    fullPass = false;
+    groups.forEach((group, index) => decorateTurn(group, index));
+    decorateThread();
   }
 
-  function flushDecorations() {
-    if (decorateFrame) cancelAnimationFrame(decorateFrame);
-    decorateFrame = 0;
-    if (decorateDeadline) clearTimeout(decorateDeadline);
-    decorateDeadline = 0;
-
-    if (fullDecorationRequested) {
-      fullDecorationRequested = false;
-      pendingAnswerRoots.clear();
-      decorateAnswers(document);
-    } else {
-      const roots = Array.from(pendingAnswerRoots);
-      pendingAnswerRoots.clear();
-      roots.forEach(decorateAnswer);
-    }
-    decorateThreadHeader();
-  }
-
-  function requestDecorationFlush() {
-    if (!decorateFrame) decorateFrame = requestAnimationFrame(flushDecorations);
-    if (!decorateDeadline) decorateDeadline = setTimeout(flushDecorations, 250);
-  }
-
-  function scheduleDecorate(input = null) {
-    if (Array.isArray(input)) {
-      for (const mutation of input) {
-        queueAnswerRoot(mutation.target);
-        mutation.addedNodes?.forEach(node => queueAnswerRoot(node));
+  function schedule(mutations = null) {
+    if (Array.isArray(mutations)) {
+      // Any mutation outside our own UI triggers a re-decoration pass; the
+      // pass itself is cheap and correct, and rAF coalesces bursts.
+      for (const mutation of mutations) {
+        const target = mutation.target instanceof Element ? mutation.target : null;
+        if (target?.closest?.('[' + HOST_ATTR + ']')) continue;
+        fullPass = true;
+        break;
       }
     } else {
-      fullDecorationRequested = true;
+      fullPass = true;
     }
-    requestDecorationFlush();
+    if (!frame) frame = requestAnimationFrame(flush);
+    if (!deadline) deadline = setTimeout(flush, 300);
   }
 
-  const observer = new MutationObserver(scheduleDecorate);
-  observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ['class', 'style', 'hidden', 'aria-hidden', 'data-state']
-  });
+  const observer = new MutationObserver(schedule);
 
-  window.addEventListener('popstate', () => scheduleDecorate());
-  window.addEventListener('hashchange', () => scheduleDecorate());
-  scheduleDecorate();
+  function observe() {
+    const root = adapter.conversationRoot() || document.body;
+    observer.disconnect();
+    // Scoped to the conversation, and without `style`, so token streaming does
+    // not fire a flush on every animation frame (F-26).
+    observer.observe(root, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-is-streaming', 'data-message-id', 'data-testid']
+    });
+  }
 
-  // Keep popup compatibility / fallback export UI.
+  observe();
+  schedule();
+  setInterval(observe, 5000);
+  window.addEventListener('popstate', () => schedule());
+  window.addEventListener('hashchange', () => schedule());
+
+  // ------------------------------------------------------------------
+  // Messaging (popup + diagnostics)
+  // ------------------------------------------------------------------
+
   chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
-    if (request?.type !== 'CHATGPT_EXPORTER_EXTRACT') return;
-    try {
-      sendResponse({ ok: true, ...extractConversation() });
-    } catch (error) {
-      sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    if (request?.type === 'CGX_EXTRACT') {
+      extractConversation()
+        .then(data => sendResponse({ ok: true, ...data }))
+        .catch(error => sendResponse({ ok: false, error: error?.message || String(error) }));
+      return true;
     }
-    return true;
+
+    if (request?.type === 'CGX_DIAGNOSTICS') {
+      sendResponse({
+        ok: true,
+        platform: adapter.id,
+        virtualized: adapter.virtualized,
+        turns: adapter.turnContainers().length,
+        selectors: kit.diagnostics.snapshot(),
+        userAgent: navigator.userAgent,
+        version: chrome.runtime.getManifest().version
+      });
+      return true;
+    }
+
+    return undefined;
   });
 })();

@@ -40,6 +40,52 @@
     mono: 'NotoMono'
   });
 
+  /**
+   * Font for one code point inside preformatted text.
+   *
+   * NotoSansMono has no box-drawing or arrow glyphs, so forcing the whole
+   * block to mono rendered diagrams as empty rectangles. Structural characters
+   * are routed to the symbol font and non-Latin scripts to their own, while
+   * everything else keeps the monospaced font that makes columns line up.
+   */
+  function preformattedFontKey(codePoint) {
+    if (codePoint >= 0x0D80 && codePoint <= 0x0DFF) return 'sinhala';
+    if (codePoint >= 0x0B80 && codePoint <= 0x0BFF) return 'tamil';
+    if (
+      (codePoint >= 0x1100 && codePoint <= 0x11FF) ||
+      (codePoint >= 0x3130 && codePoint <= 0x318F) ||
+      (codePoint >= 0xAC00 && codePoint <= 0xD7AF)
+    ) return 'korean';
+    if (codePoint >= 0x1F000 && codePoint <= 0x1FAFF) return 'emoji';
+
+    // Routing here is driven by MEASURED glyph coverage of the bundled fonts,
+    // not by what the Unicode block names suggest. NotoSansMono covers box
+    // drawing (U+2500-257F), block elements, arrows and geometric shapes;
+    // NotoSansSymbols2 does NOT, and sending them there rendered every diagram
+    // as empty rectangles. tests/font-coverage.test.js enforces this.
+    if (
+      (codePoint >= 0x2600 && codePoint <= 0x27BF) || // dingbats, check marks
+      (codePoint >= 0x2B00 && codePoint <= 0x2BFF)    // extra arrows and shapes
+    ) return 'symbols';
+
+    return 'mono';
+  }
+
+  /** Split one preformatted line into runs that each have a font with glyphs. */
+  function monoRuns(line) {
+    const runs = [];
+    let current = null;
+    for (const char of Array.from(String(line))) {
+      const key = preformattedFontKey(char.codePointAt(0));
+      if (current && current.__key === key) current.text += char;
+      else {
+        current = { text: char, font: FONT_NAMES[key] || 'NotoMono', __key: key };
+        runs.push(current);
+      }
+    }
+    return runs.length ? runs.map(({ text, font }) => ({ text, font })) : [{ text: '', font: 'NotoMono' }];
+  }
+
   const loadedFontKeys = new Set();
   let fontLoadPromise = null;
   let mediaBytesUsed = 0;
@@ -81,7 +127,14 @@
     }
     if (!node || typeof node !== 'object') return out;
     if (typeof node.cgxFont === 'string' && node.cgxFont !== 'latin') out.add(node.cgxFont);
-    if (node.cgxPreformatted) out.add('mono');
+    if (node.cgxPreformatted) {
+      out.add('mono');
+      // Box drawing and arrows live in the symbol font, not the mono font.
+      for (const char of Array.from(String(node.cgxPreformatted.text || ''))) {
+        const key = preformattedFontKey(char.codePointAt(0));
+        if (key !== 'mono') out.add(key);
+      }
+    }
     if (node.cgxMath || node.cgxMathInline) out.add('symbols');
     Object.values(node).forEach(value => collectRequiredFontKeys(value, out));
     return out;
@@ -361,31 +414,64 @@
     }
   }
 
-  function preformattedFontSize(text, pageSize, diagram) {
+  function preformattedFontSize(spec, pageSize) {
+    // src/ir/pdf.js already decided the size: code is wrapped at a legible
+    // floor, diagrams are shrunk to fit or sent to their own landscape page.
+    if (Number(spec?.fontSize) > 0) return Number(spec.fontSize);
     const contentWidth = pageSize === 'A4' ? 493 : 510;
-    const longest = Math.max(1, ...String(text || '').split('\n').map(line => Array.from(line).length));
-    const preferred = diagram ? 8.3 : 8.5;
-    return Math.max(5.5, Math.min(preferred, contentWidth / (longest * 0.61)));
+    const longest = Math.max(1, ...String(spec?.text || '').split('\n').map(line => Array.from(line).length));
+    return Math.max(6, Math.min(spec?.diagram ? 8.3 : 8.5, contentWidth / (longest * 0.61)));
   }
 
   async function transformNode(node, pageSize = 'A4') {
     if (Array.isArray(node)) return Promise.all(node.map(item => transformNode(item, pageSize)));
     if (!node || typeof node !== 'object') return node;
 
+    if (node.cgxRestoreOrientation) {
+      return { text: '', pageBreak: 'after', pageOrientation: 'portrait' };
+    }
+
     if (node.cgxPreformatted) {
       const spec = node.cgxPreformatted;
       const text = String(spec.text || '');
-      return {
-        text,
-        font: 'NotoMono',
-        fontSize: preformattedFontSize(text, pageSize, Boolean(spec.diagram)),
-        lineHeight: spec.diagram ? 1.1 : 1.18,
-        noWrap: true,
+      const fontSize = preformattedFontSize(spec, pageSize);
+      const contentWidth = (spec.landscape ? 700 : (pageSize === 'A4' ? 493 : 510)) - 14;
+      const capacity = Math.floor(contentWidth / Math.max(0.1, fontSize * 0.605));
+
+      // One node per line.
+      //
+      // pdfmake's `noWrap` puts the whole string on a single line, so a
+      // multi-line diagram passed as one `text` collapsed into one row and was
+      // then clipped at the page edge. Splitting first makes the line breaks
+      // structural instead of depending on how `\n` interacts with noWrap.
+      const lines = text.split('\n');
+      const stack = lines.map(line => ({
+        text: monoRuns(line.length ? line : ' '),
+        // A line that cannot fit even at this size must wrap rather than be
+        // silently truncated; the rest keep their exact columns.
+        noWrap: Boolean(spec.diagram) && Array.from(line).length <= capacity,
         preserveLeadingSpaces: true,
-        preserveTrailingSpaces: true,
+        preserveTrailingSpaces: true
+      }));
+
+      const out = {
+        stack,
+        fontSize,
+        lineHeight: spec.diagram ? 1.12 : 1.2,
         background: node.background || '#F4F6F8',
         margin: node.margin || [7, 6, 7, 8]
       };
+      if (spec.landscape) {
+        // A diagram too wide to shrink legibly gets its own landscape page
+        // rather than being rendered at an unreadable size. The definition
+        // emits a matching portrait restore node immediately after this one.
+        return {
+          stack: [out],
+          pageBreak: 'before',
+          pageOrientation: 'landscape'
+        };
+      }
+      return out;
     }
 
     if (node.cgxMath) return transformMathNode(node.cgxMath);
@@ -438,9 +524,10 @@
     const pageSize = String(definition?.pageSize || 'A4');
     emitProgress(jobId, 'assets');
     const doc = await transformNode(definition || {}, pageSize);
+    const footerLabel = String(definition?.cgxFooterLabel || 'AI Thread Exporter');
     doc.footer = (currentPage, pageCount) => ({
       columns: [
-        { text: 'ChatGPT Thread Exporter', alignment: 'left' },
+        { text: footerLabel, alignment: 'left' },
         { text: 'Page ' + currentPage + ' of ' + pageCount, alignment: 'right' }
       ],
       margin: [51, 10, 51, 0],
@@ -600,6 +687,16 @@
 
     if (request.type === CLEANUP_MESSAGE) {
       sendResponse({ ok:true, released:releaseUrl(request.url) });
+      return;
+    }
+
+    if (request.type === 'CGX_OFFSCREEN_WATCHDOG_FIRED') {
+      if (currentJobId) {
+        setJobState(currentJobId, 'error', {
+          error: 'PDF rendering exceeded the safety deadline and the renderer was reset.'
+        });
+      }
+      sendResponse({ ok: true });
       return;
     }
 

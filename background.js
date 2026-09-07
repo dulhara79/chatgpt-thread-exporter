@@ -8,18 +8,18 @@
   const RENDER_FINISHED_MESSAGE = 'CGX_PDF_RENDER_FINISHED';
   const DOWNLOAD_STATE_MESSAGE = 'CGX_OFFSCREEN_DOWNLOAD_STATE';
   const WATCHDOG_ALARM = 'cgx-pdf-render-watchdog';
-  const WATCHDOG_MS = 55000;
+  const WATCHDOG_MS = 45000;
 
   let creatingOffscreen = null;
   let resettingOffscreen = null;
 
   function sanitizeFilename(name) {
-    const cleaned = String(name || 'ChatGPT Conversation')
+    const cleaned = String(name || 'Conversation')
       .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '')
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 120);
-    const base = (cleaned || 'ChatGPT Conversation').replace(/\.pdf$/i, '');
+    const base = (cleaned || 'Conversation').replace(/\.pdf$/i, '');
     return base + '.pdf';
   }
 
@@ -32,10 +32,8 @@
       });
       return contexts.length > 0;
     }
-    if (globalThis.clients?.matchAll) {
-      const clients = await globalThis.clients.matchAll({ includeUncontrolled: true, type: 'window' });
-      return clients.some(client => client.url === url);
-    }
+    // chrome.runtime.getContexts is the only working path for offscreen
+    // documents and is available in every Chrome the manifest supports (116+).
     return false;
   }
 
@@ -149,6 +147,12 @@
 
   chrome.alarms.onAlarm.addListener(alarm => {
     if (alarm?.name !== WATCHDOG_ALARM) return;
+    // Tell the renderer why it is about to disappear, so the polling caller
+    // sees a real error rather than only a client-side deadline.
+    chrome.runtime.sendMessage({
+      target: 'cgx-offscreen-pdf',
+      type: 'CGX_OFFSCREEN_WATCHDOG_FIRED'
+    }).catch(() => {});
     // The offscreen page is the render owner. If it has not cleared the
     // watchdog after producing a Blob, destroy the whole context. This is the
     // only reliable cancellation boundary for synchronous/non-interruptible

@@ -5,12 +5,29 @@ import path from 'node:path';
 
 const extensionPath = path.resolve('.');
 const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cgx-chrome-'));
-const browser = await puppeteer.launch({
-  headless: false,
-  userDataDir,
-  enableExtensions: [extensionPath],
-  args: ['--no-sandbox', '--disable-dev-shm-usage']
-});
+
+// This test needs a real Chrome because MV3 offscreen documents cannot be
+// emulated. Skip cleanly where the browser was not downloaded (sandboxed dev
+// environments) rather than failing for an unrelated reason; CI installs it
+// explicitly, so the coverage is not lost where it matters.
+let browser;
+try {
+  browser = await puppeteer.launch({
+    headless: false,
+    userDataDir,
+    enableExtensions: [extensionPath],
+    args: ['--no-sandbox', '--disable-dev-shm-usage']
+  });
+} catch (error) {
+  if (/Could not find Chrome|Browser was not found/i.test(String(error?.message))) {
+    process.stdout.write(
+      'SKIP: Chrome is not installed. Run `npx puppeteer browsers install chrome` to enable this test.\n'
+    );
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+    process.exit(0);
+  }
+  throw error;
+}
 
 try {
   const target = await browser.waitForTarget(
@@ -133,6 +150,41 @@ try {
     result.rendered.magic +
     '\n'
   );
+
+  // Selector canary: load each committed fixture in real Chrome, run the
+  // adapters against it, and fail if a platform stops resolving turns.
+  for (const [name, url] of [
+    ['chatgpt-thread.html', 'https://chatgpt.com/c/smoke'],
+    ['claude-thread.html', 'https://claude.ai/chat/smoke']
+  ]) {
+    const fixtureHtml = fs.readFileSync(path.join('tests', 'fixtures', name), 'utf8');
+    const fixturePage = await browser.newPage();
+    await fixturePage.setRequestInterception(true);
+    fixturePage.on('request', request => {
+      if (request.url() === url) request.respond({ contentType: 'text/html', body: fixtureHtml });
+      else request.continue();
+    });
+    await fixturePage.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+
+    const summary = await fixturePage.evaluate(() => {
+      const adapter = globalThis.ThreadExporterRegistry?.detect(location.href);
+      if (!adapter) return { error: 'no adapter resolved' };
+      const turns = adapter.turnContainers();
+      return {
+        platform: adapter.id,
+        turns: turns.length,
+        answers: turns.reduce((sum, turn) => sum + adapter.assistantNodes(turn).length, 0),
+        title: adapter.conversationTitle(),
+        misses: globalThis.ThreadExporterAdapterKit.diagnostics.snapshot().misses
+      };
+    });
+
+    process.stdout.write(name + ' -> ' + JSON.stringify(summary) + '\n');
+    if (summary.error) throw new Error(name + ': ' + summary.error);
+    if (!(summary.turns > 0)) throw new Error(name + ': no turns resolved in real Chrome');
+    if (!(summary.answers > 0)) throw new Error(name + ': no assistant messages resolved');
+    await fixturePage.close();
+  }
 } finally {
   await browser.close();
   fs.rmSync(userDataDir, { recursive:true, force:true });
