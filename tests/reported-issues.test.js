@@ -6,7 +6,7 @@
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadPage, loadPure, fixture, findNode, findAll, plain } = require('./helpers/harness.js');
+const { loadPage, loadPure, fixture, findNode, findAll, plain, readSource } = require('./helpers/harness.js');
 
 const { IR, MD, exporter } = loadPure();
 
