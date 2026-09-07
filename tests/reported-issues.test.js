@@ -727,3 +727,109 @@ test('attachment policy renders Markdown and labels archive bundles explicitly',
   assert.match(source, /internal files are not available/i);
   assert.match(source, /attachmentLanguage\(filename\)/, 'source files keep language-aware code formatting');
 });
+
+
+test('assistant-generated Markdown file cards are detected and captured', async () => {
+  const page = loadPage(
+    `<html><body><main>
+      <article data-testid="conversation-turn-1">
+        <div data-message-author-role="user"><div class="markdown"><p>Create the audit.</p></div></div>
+      </article>
+      <article data-testid="conversation-turn-2">
+        <div data-message-author-role="assistant"><div class="markdown">
+          <p>Done.</p>
+          <div class="file-card">
+            <a href="/mnt/data/full-audit.md" download="full-audit.md">full-audit.md</a>
+            <pre># Full audit\n\nCritical finding body.</pre>
+          </div>
+        </div></div>
+      </article>
+    </main></body></html>`,
+    'https://chatgpt.com/c/generated-file'
+  );
+
+  const assistant = page.adapter.messages().find(message => message.role === 'assistant').node;
+  const items = page.adapter.attachments(assistant);
+  assert.equal(items.length, 1, 'generated .md file must be treated as an assistant attachment');
+  assert.match(items[0].textContent, /full-audit\.md/);
+
+  const captured = await page.adapter.captureAttachments(assistant);
+  assert.ok(captured[0].__cgxAttachmentContent, 'readable generated file body is snapshotted');
+  assert.match(page.extract.preservedText(captured[0].__cgxAttachmentContent), /Critical finding body/);
+
+  const source = readSource('content.js');
+  assert.match(source, /appendAttachmentExtras\(message, node, capturedAnswerAttachments, 'assistant'\)/,
+    'assistant attachments must be appended to answer IR');
+});
+
+test('Claude artifact documents may contain Claude sidebar vocabulary', () => {
+  const page = loadPage(
+    `<html><body>
+      <div data-test-render-count="1"><div data-testid="user-message"><p>Audit the UI.</p></div></div>
+      <div data-test-render-count="2"><div class="font-claude-response">
+        <button data-testid="artifact-card"><span class="title">UI audit</span><span class="type">Document</span></button>
+      </div></div>
+      <aside class="artifact-panel"><div data-testid="artifact-content">
+        <article class="prose">
+          <h2>Claude navigation audit</h2>
+          <p>Projects, Artifacts, Scheduled, Customize, Pinned, and Chats and tasks are discussed here as document content.</p>
+        </article>
+      </div></aside>
+    </body></html>`,
+    'https://claude.ai/chat/ui-audit'
+  );
+  const group = page.window.ThreadExporterAdapterKit.groupTurns(page.adapter.messages())[0];
+  const artifacts = page.adapter.artifacts(group.answers[0]);
+  assert.equal(artifacts.length, 1);
+  const artifact = findBlock(
+    page.extract.fromMessage(page.adapter.messageBody(group.answers[0]), { artifacts }),
+    'artifact'
+  );
+  assert.match(page.IR.blocksToPlainText(artifact.blocks), /Projects, Artifacts, Scheduled/);
+});
+
+test('Claude reports a detached artifact card instead of pretending it captured a body', async () => {
+  const page = loadPage(
+    `<html><body>
+      <div data-test-render-count="1"><div data-testid="user-message"><p>Q</p></div></div>
+      <div data-test-render-count="2"><div class="font-claude-response">
+        <button data-testid="artifact-card"><span class="title">Detached report</span><span class="type">Document</span></button>
+      </div></div>
+    </body></html>`,
+    'https://claude.ai/chat/detached'
+  );
+  page.adapter.resetCaptureDiagnostics();
+  const answer = page.adapter.messages().find(message => message.role === 'assistant').node;
+  answer.closest('[data-test-render-count]').remove();
+  const cards = await page.adapter.captureArtifacts(answer);
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].__cgxArtifactPanel, null);
+  assert.equal(page.adapter.captureDiagnostics().failures[0].reason, 'detached-card');
+});
+
+test('Claude live artifact capture waits for panel content created by the card click', async () => {
+  const page = loadPage(
+    `<html><body>
+      <div data-test-render-count="1"><div data-testid="user-message"><p>Q</p></div></div>
+      <div data-test-render-count="2"><div class="font-claude-response">
+        <button data-testid="artifact-card"><span class="title">Live report</span><span class="type">Document</span></button>
+      </div></div>
+    </body></html>`,
+    'https://claude.ai/chat/live-artifact'
+  );
+  const answer = page.adapter.messages().find(message => message.role === 'assistant').node;
+  const card = answer.querySelector('[data-testid="artifact-card"]');
+  card.addEventListener('click', () => {
+    if (page.document.querySelector('[data-testid="artifact-content"]')) return;
+    const aside = page.document.createElement('aside');
+    aside.className = 'artifact-panel';
+    aside.innerHTML = '<div data-testid="artifact-content"><article class="prose"><h2>Captured live</h2><p>Full body.</p></article></div>';
+    page.document.body.appendChild(aside);
+  });
+
+  page.adapter.resetCaptureDiagnostics();
+  const cards = await page.adapter.captureArtifacts(answer);
+  assert.ok(cards[0].__cgxArtifactPanel, 'live panel body is snapshotted');
+  assert.match(cards[0].__cgxArtifactPanel.textContent, /Full body/);
+  assert.equal(page.adapter.captureDiagnostics().captured, 1);
+});
