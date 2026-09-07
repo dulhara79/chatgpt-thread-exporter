@@ -143,3 +143,12 @@ test('version is consistent across manifest, package and popup', () => {
   assert.ok(!/V0\.\d/.test(readSource('popup.html')),
     'popup must read its version from the manifest, not hard-code it');
 });
+
+
+test('settings diagnostics surface effective export settings and artifact capture state', () => {
+  const options = readSource('options.js');
+  assert.match(options, /effectiveSettings/,
+    'Settings diagnostics must show whether artifact export is effectively enabled');
+  assert.match(options, /artifactDiagnostics/,
+    'Settings diagnostics must show artifact capture counts and failure reasons');
+});
