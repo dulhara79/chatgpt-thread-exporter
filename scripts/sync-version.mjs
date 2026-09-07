@@ -34,6 +34,21 @@ if (pkg.version !== version) {
   if (!check) write('package.json', pkgRaw.replace(/"version":\s*"[^"]*"/, `"version": "${version}"`));
 }
 
+// package-lock.json root package metadata
+if (fs.existsSync(path.join(ROOT, 'package-lock.json'))) {
+  const lockRaw = read('package-lock.json');
+  const lock = JSON.parse(lockRaw);
+  const rootVersion = lock.packages?.['']?.version;
+  if (lock.version !== version || rootVersion !== version) {
+    problems.push(`package-lock.json is ${lock.version}/${rootVersion}, manifest is ${version}`);
+    if (!check) {
+      lock.version = version;
+      if (lock.packages?.['']) lock.packages[''].version = version;
+      write('package-lock.json', JSON.stringify(lock, null, 2) + '\n');
+    }
+  }
+}
+
 // README heading, e.g. "# AI Thread Exporter (V0.6.0)"
 if (fs.existsSync(path.join(ROOT, 'README.md'))) {
   const readme = read('README.md');
