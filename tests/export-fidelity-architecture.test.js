@@ -172,3 +172,40 @@ test('unreadable generated Markdown attachment records an explicit capture failu
   assert.ok(captured[0].__cgxAttachmentFailure,
     'unreadable text attachment must retain a machine-readable failure reason');
 });
+
+test('ChatGPT captures generated Markdown from an allowed OpenAI CDN through the extension worker', async () => {
+  const page = loadPage(
+    `<html><body><main>
+      <article data-testid="conversation-turn-1">
+        <div data-message-author-role="assistant"><div class="markdown">
+          <div class="file-card">
+            <a download="cdn-report.md"
+               href="https://files.oaiusercontent.com/files/cdn-report.md">cdn-report.md</a>
+          </div>
+        </div></div>
+      </article>
+    </main></body></html>`,
+    'https://chatgpt.com/c/generated-md-cdn'
+  );
+
+  const requests = [];
+  page.window.chrome = {
+    runtime: {
+      sendMessage: async message => {
+        requests.push(message);
+        return {
+          ok: true,
+          text: '# CDN Report\n\n- captured\n\n```js\nconsole.log("cdn")\n```'
+        };
+      }
+    }
+  };
+
+  const assistant = page.adapter.messages().find(message => message.role === 'assistant').node;
+  const captured = await page.adapter.captureAttachments(assistant);
+  assert.equal(requests.length, 1, 'cross-origin safe file must be fetched by the extension worker');
+  assert.equal(requests[0].type, 'CGX_FETCH_TEXT_ATTACHMENT');
+  assert.ok(captured[0].__cgxAttachmentContent);
+  assert.match(page.extract.preservedText(captured[0].__cgxAttachmentContent), /# CDN Report/);
+  assert.match(page.extract.preservedText(captured[0].__cgxAttachmentContent), /console\.log\("cdn"\)/);
+});
