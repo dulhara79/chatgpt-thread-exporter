@@ -63,10 +63,15 @@
     // Artifact bodies live in a side panel, so capturing them means opening
     // each one. Only done for assistant messages, and only when enabled.
     let artifacts = [];
+    let excludedArtifactCount = 0;
     if (isAssistant && settings.includeArtifacts !== false) {
       artifacts = typeof adapter.captureArtifacts === 'function'
         ? await adapter.captureArtifacts(node)
         : adapter.artifacts(node);
+    } else if (isAssistant && settings.includeArtifacts === false) {
+      try {
+        excludedArtifactCount = (adapter.artifacts?.(node) || []).length;
+      } catch {}
     }
 
     const blocks = extractor.fromMessage(body, {
@@ -75,6 +80,22 @@
       includeThinking: settings.includeThinking,
       includeArtifacts: settings.includeArtifacts !== false
     });
+
+    if (excludedArtifactCount > 0) {
+      blocks.push({
+        type: 'paragraph',
+        inline: [{
+          type: 'em',
+          children: [{
+            type: 'text',
+            text: excludedArtifactCount === 1
+              ? '1 artifact was excluded by the current export settings.'
+              : excludedArtifactCount + ' artifacts were excluded by the current export settings.'
+          }]
+        }]
+      });
+    }
+
     if (!blocks.length) return null;
     return { role, blocks, text: IR.blocksToPlainText(blocks) };
   }
