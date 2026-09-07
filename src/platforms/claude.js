@@ -82,8 +82,72 @@
     '#markdown-artifact',
     '#wiggle-file-content',
     '[data-testid="artifact-content"]',
+    '[data-testid="artifact-preview"]',
+    '[data-testid="artifact-renderer"]',
+    '[data-testid="artifact-viewer"]',
     () => document.querySelector('div.h-full.top-0 div.font-mono') || null
   ];
+
+  function inConversationFlow(element) {
+    return Boolean(element?.closest?.(
+      'div[data-test-render-count], [class*="conversation-turn"], ' + USER_SELECTOR + ', ' + ASSISTANT_SELECTOR
+    ));
+  }
+
+  function panelText(panel) {
+    if (!(panel instanceof Element)) return '';
+    if (panel.tagName?.toLowerCase() === 'iframe') {
+      try {
+        const body = panel.contentDocument?.body;
+        return String(body?.innerText || body?.textContent || '');
+      } catch {
+        return '';
+      }
+    }
+    return String(panel.innerText || panel.textContent || '');
+  }
+
+  function snapshotArtifactPanel(panel) {
+    if (!(panel instanceof Element)) return null;
+    if (panel.tagName?.toLowerCase() === 'iframe') {
+      try {
+        const body = panel.contentDocument?.body;
+        return body ? document.importNode(body, true) : null;
+      } catch {
+        return null;
+      }
+    }
+    return panel.cloneNode(true);
+  }
+
+  function findArtifactPanel() {
+    const direct = resolve(document, ARTIFACT_CANDIDATES, 'claude.artifactPanel');
+    if (direct && !inConversationFlow(direct)) return direct;
+
+    const candidates = Array.from(document.querySelectorAll([
+      'aside [data-testid*="artifact" i]',
+      '[role="dialog"] [data-testid*="artifact" i]',
+      'aside [class*="artifact" i]',
+      '[role="dialog"] [class*="artifact" i]',
+      'iframe[title*="artifact" i]',
+      'iframe[title*="preview" i]',
+      'aside',
+      '[role="dialog"]'
+    ].join(', '))).filter(element => !inConversationFlow(element) && present(element));
+
+    candidates.sort((a, b) => {
+      const score = element => {
+        const marker = actionLabel(element);
+        const textLength = Math.min(50000, panelText(element).trim().length);
+        const semantic = /artifact|preview|document|code/.test(marker) ? 2500 : 0;
+        const rich = element.querySelector?.('pre, code, article, .prose, [class*="prose" i], table, ul, ol') ? 1200 : 0;
+        return textLength + semantic + rich;
+      };
+      return score(b) - score(a);
+    });
+
+    return candidates[0] || null;
+  }
 
   const THINKING_CANDIDATES = [
     '[data-testid="thinking-block"]',
@@ -108,6 +172,7 @@
     if (!(turn instanceof Element)) return [];
     const selectors = [
       '[data-testid="artifact-card"]',
+      '[data-testid*="artifact" i][role="button"]',
       'button[aria-label*="artifact" i]',
       '[class*="artifact" i]'
     ];
@@ -115,7 +180,12 @@
       const found = Array.from(turn.querySelectorAll(selector));
       if (found.length) return found;
     }
-    return [];
+
+    return Array.from(turn.querySelectorAll('button, [role="button"]')).filter(element => {
+      const label = actionLabel(element);
+      return /(artifact|document|react component|\bcode\b|html|svg|markdown)/i.test(label) &&
+        !/copy|retry|feedback|edit|more/.test(label);
+    });
   }
 
   const adapter = defineAdapter({
@@ -277,9 +347,9 @@
       if (!cards.length) return [];
       // If the side panel happens to be open, hand back the rendered body too
       // so the extractor can inline real content instead of a placeholder.
-      const panel = resolve(document, ARTIFACT_CANDIDATES, 'claude.artifactPanel');
+      const panel = findArtifactPanel();
       return cards.map(card => {
-        card.__cgxArtifactPanel = panel && visible(panel) ? panel : null;
+        card.__cgxArtifactPanel = panel && present(panel) ? snapshotArtifactPanel(panel) : null;
         return card;
       });
     },
@@ -297,7 +367,7 @@
       const cards = artifactCards(owner);
       if (!cards.length) return [];
 
-      const panelWasOpen = Boolean(resolve(document, ARTIFACT_CANDIDATES, 'claude.artifactPanel'));
+      const panelWasOpen = Boolean(findArtifactPanel());
 
       for (const card of cards) {
         if (card.__cgxArtifactPanel) continue;
@@ -305,20 +375,34 @@
           const button = card.matches('button') ? card : card.querySelector('button') || card;
           button.click();
 
-          // Wait for the panel to mount and stop changing size.
+          // Wait for the readable artifact body to settle. The card title/type
+          // alone does not count as artifact content.
           let panel = null;
           let lastLength = -1;
-          for (let attempt = 0; attempt < 25; attempt++) {
+          let stableRounds = 0;
+          const cardLabel = actionLabel(card);
+          for (let attempt = 0; attempt < 30; attempt++) {
             await sleep(120);
-            panel = resolve(document, ARTIFACT_CANDIDATES, 'claude.artifactPanel');
-            const length = panel?.textContent?.length ?? -1;
-            if (panel && length > 0 && length === lastLength) break;
+            panel = findArtifactPanel();
+            const readable = panelText(panel).replace(/\s+/g, ' ').trim();
+            const length = readable.length;
+            const onlyChrome = readable &&
+              cardLabel &&
+              readable.length <= cardLabel.length + 24 &&
+              cardLabel.includes(readable.toLowerCase());
+
+            if (panel && length > 0 && !onlyChrome) {
+              stableRounds = length === lastLength ? stableRounds + 1 : 0;
+              if (stableRounds >= 1) break;
+            } else {
+              stableRounds = 0;
+            }
             lastLength = length;
           }
 
-          // Snapshot: cloning detaches it from the panel we are about to reuse
-          // for the next artifact, so each card keeps its own content.
-          card.__cgxArtifactPanel = panel ? panel.cloneNode(true) : null;
+          // Detach the content before Claude reuses the side panel. Same-origin
+          // preview iframe bodies are imported so normal extraction can read them.
+          card.__cgxArtifactPanel = panel ? snapshotArtifactPanel(panel) : null;
         } catch {
           card.__cgxArtifactPanel = null;
         }
@@ -350,14 +434,102 @@
         '[data-testid*="attachment" i]',
         '[data-testid*="paste" i]',
         '[class*="attachment" i]',
-        // Claude shows long pasted text as its own collapsible card; its
-        // contents were being dropped, leaving the question section blank.
         '[class*="pasted" i]',
-        'button[aria-label*="paste" i]'
+        '[aria-label*="paste" i]',
+        '[aria-label*="pasted" i]',
+        '[title*="paste" i]'
       ].join(', ')));
 
-      // Some layouts nest the chip inside its own wrapper; keep the outermost.
-      return found.filter(el => !found.some(other => other !== el && other.contains(el)));
+      for (const element of scope.querySelectorAll('button, [role="button"], details')) {
+        if (/pasted content|paste content|text attachment|attached text/i.test(actionLabel(element))) {
+          found.push(element);
+        }
+      }
+
+      const unique = Array.from(new Set(found));
+      return unique.filter(el => !unique.some(other => other !== el && other.contains(el)));
+    },
+
+    async captureAttachments(turn) {
+      const items = adapter.attachments(turn);
+      if (!items.length) return [];
+
+      const readableNode = element => {
+        if (!(element instanceof Element)) return null;
+        const candidates = Array.from(element.querySelectorAll([
+          'pre',
+          'textarea',
+          '[class*="whitespace-pre" i]',
+          '[class*="font-mono" i]',
+          '[data-testid*="content" i]'
+        ].join(', ')));
+        candidates.sort((a, b) =>
+          String(b.value || b.textContent || '').length - String(a.value || a.textContent || '').length
+        );
+        return candidates.find(candidate => String(candidate.value || candidate.textContent || '').trim()) || null;
+      };
+
+      const overlayFor = element => {
+        const candidates = Array.from(document.querySelectorAll([
+          'dialog',
+          '[role="dialog"]',
+          '[data-testid*="paste" i]',
+          '[class*="popover" i]'
+        ].join(', '))).filter(candidate =>
+          candidate !== element &&
+          !element.contains(candidate) &&
+          present(candidate) &&
+          String(candidate.textContent || '').trim().length > 12
+        );
+        candidates.sort((a, b) =>
+          String(b.textContent || '').length - String(a.textContent || '').length
+        );
+        return candidates[0] || null;
+      };
+
+      for (const item of items) {
+        const marker = [
+          actionLabel(item),
+          item.getAttribute?.('data-testid') || '',
+          item.getAttribute?.('class') || ''
+        ].join(' ');
+
+        if (!/paste|pasted|text attachment|attached text/i.test(marker)) continue;
+
+        let body = readableNode(item);
+        if (body) {
+          item.__cgxAttachmentContent = body.cloneNode(true);
+          continue;
+        }
+
+        const clickable = item.matches('button, [role="button"], summary')
+          ? item
+          : item.querySelector('button, [role="button"], summary');
+        if (!clickable) continue;
+
+        try { clickable.click(); } catch {}
+
+        for (let attempt = 0; attempt < 15; attempt++) {
+          await sleep(80);
+          body = readableNode(item) || overlayFor(item);
+          const text = String(body?.value || body?.textContent || '').trim();
+          if (text && !/^pasted content$/i.test(text)) break;
+        }
+
+        if (body) {
+          const preferred = readableNode(body) || body;
+          item.__cgxAttachmentContent = preferred.cloneNode(true);
+
+          const dialog = body.closest?.('dialog, [role="dialog"]') ||
+            (body.matches?.('dialog, [role="dialog"]') ? body : null);
+          const close = dialog?.querySelector?.(
+            'button[aria-label*="close" i], button[data-testid*="close" i]'
+          );
+          try { close?.click(); } catch {}
+        }
+      }
+
+      return items;
     },
 
     async ensureFullyLoaded(options = {}) {
