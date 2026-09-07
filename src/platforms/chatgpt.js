@@ -372,7 +372,17 @@
               : unescape(encodeURIComponent(text)).length;
             if (!text.trim() || byteLength > 4 * 1024 * 1024) continue;
           } else {
-            if (typeof fetch !== 'function') continue;
+            // `sandbox:` is a UI-level ChatGPT file reference, not a Fetch
+            // scheme exposed to content scripts. Keep an explicit reason so the
+            // generated file is never silently represented as an empty card.
+            if (parsed.protocol === 'sandbox:') {
+              item.__cgxAttachmentFailure = 'sandbox-url-inaccessible';
+              continue;
+            }
+            if (typeof fetch !== 'function') {
+              item.__cgxAttachmentFailure = 'fetch-unavailable';
+              continue;
+            }
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), 8000);
             let response;
