@@ -152,3 +152,12 @@ test('settings diagnostics surface effective export settings and artifact captur
   assert.match(options, /artifactDiagnostics/,
     'Settings diagnostics must show artifact capture counts and failure reasons');
 });
+
+
+test('attachment capture failures are rendered into the exported conversation', () => {
+  const content = readSource('content.js');
+  assert.match(content, /__cgxAttachmentFailure/,
+    'attachment failure metadata must reach the generic attachment-to-IR boundary');
+  assert.match(content, /could not be read/i,
+    'the exported document must explain an unreadable text attachment instead of emitting a blank label');
+});
