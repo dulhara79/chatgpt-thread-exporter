@@ -1,0 +1,31 @@
+<!doctype html>
+<html><head><title>Deployment plan - ChatGPT</title></head>
+<body>
+<header><button data-testid="share-chat-button">Share</button></header>
+<main>
+  <article data-testid="conversation-turn-1">
+    <div data-message-author-role="user" data-message-id="u1">
+      <div class="markdown"><p>How do I deploy this?</p></div>
+    </div>
+    <div data-message-author-role="assistant" data-message-id="a1">
+      <div class="markdown">
+        <h2>Deployment steps</h2>
+        <ol start="1">
+          <li><p>Build the bundle</p>
+            <pre><code class="language-bash">npm run build</code></pre>
+          </li>
+          <li><p>Upload it</p>
+            <ul><li>Use the dashboard</li><li>Or the CLI</li></ul>
+          </li>
+        </ol>
+        <table>
+          <thead><tr><th align="left">Env</th><th align="right">Port</th></tr></thead>
+          <tbody><tr><td>dev</td><td>3000</td></tr></tbody>
+        </table>
+        <p>See <a href="https://example.com/docs">the docs</a> and <strong>note the <em>caveat</em></strong>.</p>
+      </div>
+      <div class="flex"><button aria-label="Copy">c</button><button aria-label="Good response">g</button></div>
+    </div>
+  </article>
+</main>
+</body></html>

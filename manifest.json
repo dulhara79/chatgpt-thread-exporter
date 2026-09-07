@@ -1,39 +1,49 @@
 {
   "manifest_version": 3,
-  "name": "ChatGPT Thread Exporter",
-  "short_name": "GPT Export",
-  "version": "0.5.2",
-  "description": "Export an entire ChatGPT conversation or any individual Q&A to professional PDF, Word (.docx), or Markdown documents.",
-  "minimum_chrome_version": "109",
+  "name": "AI Thread Exporter",
+  "short_name": "AI Export",
+  "version": "0.6.0",
+  "description": "Export any ChatGPT or Claude conversation — or a single Q&A — to professional PDF, Word (.docx), or Markdown documents.",
+  "minimum_chrome_version": "116",
   "permissions": [
     "activeTab",
     "downloads",
     "offscreen",
-    "alarms"
+    "alarms",
+    "storage"
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
     "https://*.oaiusercontent.com/*",
-    "https://*.oaistatic.com/*"
+    "https://*.oaistatic.com/*",
+    "https://claude.ai/*"
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Export ChatGPT conversation"
+    "default_title": "Export this conversation"
   },
+  "options_page": "options.html",
   "content_scripts": [
     {
       "matches": [
         "https://chatgpt.com/*",
-        "https://chat.openai.com/*"
+        "https://chat.openai.com/*",
+        "https://claude.ai/*"
       ],
       "js": [
         "math.js",
+        "src/platforms/adapter.js",
+        "src/platforms/chatgpt.js",
+        "src/platforms/claude.js",
+        "src/platforms/registry.js",
+        "src/ir/parse.js",
+        "src/ir/extract.js",
+        "src/ir/markdown.js",
+        "src/ir/pdf.js",
+        "src/ir/docx.js",
         "exporter.js",
         "content.js"
-      ],
-      "css": [
-        "content.css"
       ],
       "run_at": "document_idle"
     }

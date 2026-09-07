@@ -361,11 +361,13 @@
     }
   }
 
-  function preformattedFontSize(text, pageSize, diagram) {
+  function preformattedFontSize(spec, pageSize) {
+    // src/ir/pdf.js already decided the size: code is wrapped at a legible
+    // floor, diagrams are shrunk to fit or sent to their own landscape page.
+    if (Number(spec?.fontSize) > 0) return Number(spec.fontSize);
     const contentWidth = pageSize === 'A4' ? 493 : 510;
-    const longest = Math.max(1, ...String(text || '').split('\n').map(line => Array.from(line).length));
-    const preferred = diagram ? 8.3 : 8.5;
-    return Math.max(5.5, Math.min(preferred, contentWidth / (longest * 0.61)));
+    const longest = Math.max(1, ...String(spec?.text || '').split('\n').map(line => Array.from(line).length));
+    return Math.max(6, Math.min(spec?.diagram ? 8.3 : 8.5, contentWidth / (longest * 0.61)));
   }
 
   async function transformNode(node, pageSize = 'A4') {
@@ -375,17 +377,29 @@
     if (node.cgxPreformatted) {
       const spec = node.cgxPreformatted;
       const text = String(spec.text || '');
-      return {
+      const out = {
         text,
         font: 'NotoMono',
-        fontSize: preformattedFontSize(text, pageSize, Boolean(spec.diagram)),
+        fontSize: preformattedFontSize(spec, pageSize),
         lineHeight: spec.diagram ? 1.1 : 1.18,
-        noWrap: true,
+        // Only exact character diagrams keep their columns. Wrapped code must
+        // reflow, or long lines are clipped off the page edge (F-08).
+        noWrap: Boolean(spec.diagram),
         preserveLeadingSpaces: true,
         preserveTrailingSpaces: true,
         background: node.background || '#F4F6F8',
         margin: node.margin || [7, 6, 7, 8]
       };
+      if (spec.landscape) {
+        // A diagram too wide to shrink legibly gets its own landscape page
+        // rather than being rendered at an unreadable size.
+        return {
+          stack: [out],
+          pageBreak: 'before',
+          pageOrientation: 'landscape'
+        };
+      }
+      return out;
     }
 
     if (node.cgxMath) return transformMathNode(node.cgxMath);
@@ -438,9 +452,10 @@
     const pageSize = String(definition?.pageSize || 'A4');
     emitProgress(jobId, 'assets');
     const doc = await transformNode(definition || {}, pageSize);
+    const footerLabel = String(definition?.cgxFooterLabel || 'AI Thread Exporter');
     doc.footer = (currentPage, pageCount) => ({
       columns: [
-        { text: 'ChatGPT Thread Exporter', alignment: 'left' },
+        { text: footerLabel, alignment: 'left' },
         { text: 'Page ' + currentPage + ' of ' + pageCount, alignment: 'right' }
       ],
       margin: [51, 10, 51, 0],
@@ -600,6 +615,16 @@
 
     if (request.type === CLEANUP_MESSAGE) {
       sendResponse({ ok:true, released:releaseUrl(request.url) });
+      return;
+    }
+
+    if (request.type === 'CGX_OFFSCREEN_WATCHDOG_FIRED') {
+      if (currentJobId) {
+        setJobState(currentJobId, 'error', {
+          error: 'PDF rendering exceeded the safety deadline and the renderer was reset.'
+        });
+      }
+      sendResponse({ ok: true });
       return;
     }
 

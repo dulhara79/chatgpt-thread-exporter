@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ChatGPT Thread Exporter</title>
+  <title>AI Thread Exporter</title>
   <style>
     :root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     * { box-sizing: border-box; }
@@ -46,7 +46,7 @@
 </head>
 <body>
   <header>
-    <h1>ChatGPT Thread Exporter</h1>
+    <h1>AI Thread Exporter</h1>
     <p class="sub">Export the whole conversation or only the Q&amp;A turns you choose. Processing stays in your browser.</p>
   </header>
   <main>
@@ -55,7 +55,7 @@
       <button id="all">Select all</button>
       <button id="none">Clear</button>
     </div>
-    <div id="status" class="status">Reading this ChatGPT tab…</div>
+    <div id="status" class="status">Reading this conversation…</div>
     <div id="meta" class="meta" hidden></div>
     <div class="select-row">
       <label><span id="count">0</span> selected Q&amp;A turn(s)</label>
@@ -67,9 +67,13 @@
       <button id="docx"><span class="format-mark format-docx"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.1 2.75h7.1l4.25 4.25v14.25H7.1z"/><path d="M14.2 2.75V7h4.25"/><path d="M4.1 9.2h6.9v9.2H4.1z"/><path d="m5.6 11 1.25 5.5 1.2-3.75 1.2 3.75L10.5 11"/></svg></span><span class="format-label">Word</span></button>
       <button id="pdf"><span class="format-mark format-pdf"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.75 2.75h7.2L18.5 7.3v13.95H6.75z"/><path d="M13.95 2.75V7.3h4.55"/><path d="M8.8 14.75h6.4M8.8 17.25h4.7"/></svg></span><span class="format-label">PDF</span></button>
     </div>
-    <footer>V0.5.0 · resilient local PDF · local-only</footer>
+    <footer><span id="version"></span> · local-only · <a href="options.html" target="_blank">Settings</a></footer>
   </main>
   <script src="math.js"></script>
+  <script src="src/ir/parse.js"></script>
+  <script src="src/ir/markdown.js"></script>
+  <script src="src/ir/pdf.js"></script>
+  <script src="src/ir/docx.js"></script>
   <script src="exporter.js"></script>
   <script src="popup.js"></script>
 </body>

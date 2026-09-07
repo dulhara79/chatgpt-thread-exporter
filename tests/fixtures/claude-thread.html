@@ -1,0 +1,28 @@
+<!doctype html>
+<html><head><title>Research notes - Claude</title></head>
+<body>
+<header><button aria-label="Share conversation">Share</button></header>
+<main>
+  <div data-test-render-count="3">
+    <div data-testid="user-message"><p>Summarise the findings.</p></div>
+    <div class="font-claude-response" data-is-streaming="false">
+      <div>
+        <p>Here is the summary in සිංහල and 한국어.</p>
+        <ul>
+          <li><p>Parent point</p>
+            <ul><li>Nested detail</li></ul>
+          </li>
+        </ul>
+        <pre><code class="language-python">print("hi")</code></pre>
+      </div>
+      <div class="flex" style="opacity:0"><button aria-label="Copy">c</button><button aria-label="Retry">r</button></div>
+    </div>
+  </div>
+  <div data-test-render-count="4">
+    <div data-testid="user-message"><p>And the risks?</p></div>
+    <div class="font-claude-response" data-is-streaming="true">
+      <div><p>Still generating</p></div>
+    </div>
+  </div>
+</main>
+</body></html>

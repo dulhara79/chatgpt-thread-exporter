@@ -1,5 +1,5 @@
 const state = { data: null, selected: new Set() };
-const exporter = globalThis.ChatGPTExporter;
+const exporter = globalThis.ThreadExporter;
 const $ = id => document.getElementById(id);
 const statusEl = $('status');
 const turnsEl = $('turns');
@@ -43,7 +43,7 @@ function render() {
       <input type="checkbox" data-id="${turn.id}" ${state.selected.has(turn.id) ? 'checked' : ''} />
       <div>
         <div class="q">${i + 1}. ${escapeHtml(shortText(turn.question.text, 125))}</div>
-        <div class="a">${escapeHtml(shortText((turn.answers || []).map(a => a.text).join(' '), 135))}</div>
+        <div class="a">${escapeHtml(shortText((turn.answers || []).map(a => a.text || '').join(' '), 135))}</div>
       </div>`;
     row.querySelector('input').addEventListener('change', event => {
       event.target.checked ? state.selected.add(turn.id) : state.selected.delete(turn.id);
@@ -55,17 +55,19 @@ function render() {
 }
 
 async function readCurrentTab() {
-  setStatus('Reading this ChatGPT tab…');
+  setStatus('Reading this conversation…');
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id || !/^https:\/\/(chatgpt\.com|chat\.openai\.com)\//.test(tab.url || '')) {
-      throw new Error('Open a ChatGPT conversation tab first.');
+    if (!tab?.id || !/^https:\/\/(chatgpt\.com|chat\.openai\.com|claude\.ai)\//.test(tab.url || '')) {
+      throw new Error('Open a ChatGPT or Claude conversation tab first.');
     }
-    const response = await chrome.tabs.sendMessage(tab.id, { type: 'CHATGPT_EXPORTER_EXTRACT' });
+    const response = await chrome.tabs.sendMessage(tab.id, { type: 'CGX_EXTRACT' });
     if (!response?.ok) throw new Error(response?.error || 'Could not read the conversation. Refresh the ChatGPT page and try again.');
     state.data = response;
     state.selected = new Set(response.turns.map(turn => turn.id));
-    setStatus(`Ready. ${response.turns.length} turn(s) found.`);
+    setStatus(response.complete === false
+      ? `Only ${response.turns.length} turn(s) are loaded. Scroll to the top of the thread and refresh for a complete export.`
+      : `Ready. ${response.turns.length} turn(s) found.`);
     render();
   } catch (error) {
     state.data = null;
@@ -134,7 +136,7 @@ $('pdf').addEventListener('click', async () => {
         setStatus(labels[progress?.stage] || 'Rendering PDF…');
       }
     });
-    setStatus('Save As opened: ' + (result?.filename || exporter.safeFilename(state.data.title || 'ChatGPT Conversation') + '.pdf'));
+    setStatus('Save As opened: ' + (result?.filename || exporter.exportFilename(state.data, turns, 'pdf')));
   } catch (error) {
     setStatus(`PDF export failed: ${error?.message || error}`, true);
   } finally {
@@ -143,3 +145,7 @@ $('pdf').addEventListener('click', async () => {
 });
 
 readCurrentTab();
+
+
+const versionEl = document.getElementById('version');
+if (versionEl) versionEl.textContent = 'v' + chrome.runtime.getManifest().version;
