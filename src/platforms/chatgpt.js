@@ -95,6 +95,7 @@
     'a[download]',
     'a[href^="blob:"]',
     'a[href^="sandbox:"]',
+    'a[href^="data:text/"]',
     'a[href*="oaiusercontent.com"]',
     'a[href*="oaistatic.com"]',
     'a[href*="/files/"]',
@@ -152,6 +153,7 @@
       try {
         const url = new URL(raw, location.href);
         if (url.protocol === 'blob:' || url.protocol === 'sandbox:') return url.href;
+        if (url.protocol === 'data:' && /^data:text\//i.test(raw)) return raw;
         if (url.protocol !== 'https:' && url.protocol !== 'http:') continue;
         const host = url.hostname.toLowerCase();
         if (
@@ -164,6 +166,10 @@
       } catch {}
     }
     return '';
+  }
+
+  function parsedProtocol(raw) {
+    try { return new URL(String(raw || ''), location.href).protocol; } catch { return ''; }
   }
 
   const adapter = defineAdapter({
@@ -346,26 +352,113 @@
         }
 
         const url = downloadableAttachmentUrl(item);
-        if (!url) continue;
+        if (!url) {
+          item.__cgxAttachmentFailure = 'content-not-exposed';
+          continue;
+        }
 
         try {
           const parsed = new URL(url, location.href);
-          const response = await fetch(url, {
-            credentials: parsed.origin === location.origin ? 'include' : 'omit',
-            referrerPolicy: 'no-referrer'
-          });
-          if (!response.ok) continue;
-          const declared = Number(response.headers.get('content-length') || 0);
-          if (declared > 4 * 1024 * 1024) continue;
-          const bytes = new Uint8Array(await response.arrayBuffer());
-          if (!bytes.length || bytes.length > 4 * 1024 * 1024) continue;
+          let text = '';
 
-          const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-          if (!text.trim()) continue;
+          if (parsed.protocol === 'data:' && /^data:text\//i.test(url)) {
+            const comma = url.indexOf(',');
+            if (comma < 0) continue;
+            const meta = url.slice(0, comma);
+            const payload = url.slice(comma + 1);
+            text = /;base64/i.test(meta) ? atob(payload) : decodeURIComponent(payload);
+            const byteLength = typeof TextEncoder === 'function'
+              ? new TextEncoder().encode(text).length
+              : unescape(encodeURIComponent(text)).length;
+            if (!text.trim() || byteLength > 4 * 1024 * 1024) continue;
+          } else {
+            // `sandbox:` is a UI-level ChatGPT file reference, not a Fetch
+            // scheme exposed to content scripts. Keep an explicit reason so the
+            // generated file is never silently represented as an empty card.
+            if (parsed.protocol === 'sandbox:') {
+              item.__cgxAttachmentFailure = 'sandbox-url-inaccessible';
+              continue;
+            }
+
+            // Content scripts are subject to the page's CORS policy. For safe
+            // OpenAI/CDN URLs already present in the visible file card, ask the
+            // extension service worker to perform the bounded host-permission
+            // fetch after it validates the URL again.
+            if (parsed.origin !== location.origin &&
+                globalThis.chrome?.runtime?.sendMessage &&
+                (
+                  parsed.hostname === 'chatgpt.com' ||
+                  parsed.hostname === 'chat.openai.com' ||
+                  parsed.hostname.endsWith('.oaiusercontent.com') ||
+                  parsed.hostname.endsWith('.oaistatic.com')
+                )) {
+              const worker = await chrome.runtime.sendMessage({
+                type: 'CGX_FETCH_TEXT_ATTACHMENT',
+                url: parsed.href,
+                filename
+              }).catch(() => null);
+              if (!worker?.ok || !String(worker.text || '').trim()) {
+                item.__cgxAttachmentFailure = worker?.error || 'worker-fetch-failed';
+                continue;
+              }
+              text = String(worker.text);
+            } else {
+              if (typeof fetch !== 'function') {
+                item.__cgxAttachmentFailure = 'fetch-unavailable';
+                continue;
+              }
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 8000);
+              let response;
+              try {
+                response = await fetch(url, {
+                  credentials: parsed.origin === location.origin ? 'include' : 'omit',
+                  referrerPolicy: 'no-referrer',
+                  signal: controller.signal
+                });
+              } finally {
+                clearTimeout(timer);
+              }
+              if (!response?.ok) {
+                item.__cgxAttachmentFailure = 'http-' + (response?.status || 'error');
+                continue;
+              }
+              const declared = Number(response.headers.get('content-length') || 0);
+              if (declared > 4 * 1024 * 1024) {
+                item.__cgxAttachmentFailure = 'attachment-too-large';
+                continue;
+              }
+              const bytes = new Uint8Array(await response.arrayBuffer());
+              if (!bytes.length) {
+                item.__cgxAttachmentFailure = 'attachment-empty';
+                continue;
+              }
+              if (bytes.length > 4 * 1024 * 1024) {
+                item.__cgxAttachmentFailure = 'attachment-too-large';
+                continue;
+              }
+              if (typeof TextDecoder === 'function') {
+                text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+              } else {
+                text = decodeURIComponent(Array.from(bytes)
+                  .map(byte => '%' + byte.toString(16).padStart(2, '0'))
+                  .join(''));
+              }
+              if (!text.trim()) {
+                item.__cgxAttachmentFailure = 'attachment-empty';
+                continue;
+              }
+            }
+          }
+
           const pre = document.createElement('pre');
           pre.textContent = text;
           item.__cgxAttachmentContent = pre;
-        } catch {}
+          item.__cgxAttachmentFailure = null;
+        } catch (error) {
+          item.__cgxAttachmentFailure =
+            parsedProtocol(url) === 'sandbox:' ? 'sandbox-url-inaccessible' : 'capture-error';
+        }
       }
 
       return items;

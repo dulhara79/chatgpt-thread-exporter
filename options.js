@@ -57,6 +57,8 @@ async function diagnose() {
       degradedSelectors: degraded,
       missedSelectors: response.selectors?.misses || {},
       notes: response.selectors?.notes || [],
+      effectiveSettings: response.effectiveSettings || {},
+      artifactDiagnostics: response.artifactDiagnostics || null,
       userAgent: response.userAgent
     }, null, 2);
     $('copyReport').hidden = false;

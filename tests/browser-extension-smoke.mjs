@@ -185,8 +185,10 @@ try {
       if (adapter.id === 'claude') {
         const firstAnswer = adapter.assistantNodes(turns[0])[0];
         const card = document.createElement('button');
-        card.setAttribute('data-testid', 'artifact-card');
-        card.innerHTML = '<span class="title">Smoke artifact</span><span class="type">Document</span>';
+        // Use a title-only visual card with no artifact/test-id wording so the
+        // real-Chrome smoke exercises the resilient fallback discovery path.
+        card.className = 'rounded-card border';
+        card.innerHTML = '<svg width="16" height="16" aria-hidden="true"></svg><span>Smoke research report</span>';
         firstAnswer.appendChild(card);
         card.addEventListener('click', () => {
           if (document.querySelector('[data-testid="artifact-content"]')) return;

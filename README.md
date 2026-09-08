@@ -1,4 +1,4 @@
-# AI Thread Exporter (V0.6.4)
+# AI Thread Exporter (V0.6.5)
 
 Export a **ChatGPT** or **Claude** conversation — the whole thread, a range, or a single
 question-and-answer pair — to a properly structured **PDF**, **Word (.docx)** or **Markdown**
@@ -84,14 +84,17 @@ Stated plainly, because these matter more than feature lists:
   so it is not PDF/UA or PDF/A conformant. Word output is better for accessibility. Fixing this properly
   means replacing pdfmake.
 - **Emoji render monochrome** in PDF. Variation selectors and ZWJ shaping controls are removed from the PDF
-  glyph stream because pdfmake can render them as blank boxes; the base emoji remain. Complex joined emoji may
-  therefore appear as adjacent monochrome emoji rather than one colour glyph.
+  glyph stream because pdfmake can render them as blank boxes; the base emoji remain. Known unsupported/newer
+  emoji scalars are rendered as readable `[U+XXXXX]` fallbacks rather than empty square glyphs. Complex joined
+  emoji may therefore appear as adjacent monochrome emoji rather than one colour glyph.
 - **Syntax highlighting** is not implemented. Code blocks are monospaced and shaded but not coloured.
 - **Response branches.** If you have regenerated an answer, only the variant currently displayed is exported.
 - **File attachments.** Text-like files (`.py`, `.md`, `.html`, `.patch`, `.json`, ...) are captured from
-  both user questions and assistant-generated download cards when the page exposes readable content or a safe
-  local/OpenAI file URL. Archives and binaries (`.zip`, `.tar.gz`, `.png`, `.docx`) are recorded by name only
-  when their bytes are not exposed by the rendered page.
+  both user questions and assistant-generated download cards when the page exposes readable content or an
+  accessible safe URL already present in the page. Markdown bodies are parsed back into document structure.
+  If the browser exposes only an unreadable `sandbox:` reference, the export records an explicit failure reason
+  instead of silently dropping the file body. Archives and binaries (`.zip`, `.tar.gz`, `.png`, `.docx`) are
+  recorded by name only when their bytes are not exposed by the rendered page.
 - **Site DOM is not a public API.** The automated browser suite uses committed redacted fixtures, not live
   authenticated conversations. Settings → **Generate report** now includes artifact capture diagnostics so a
   site change can be identified without exporting private content.

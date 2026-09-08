@@ -1,0 +1,30 @@
+<!doctype html>
+<html><head><title>Artifact regression - Claude</title></head>
+<body>
+  <nav aria-label="Sidebar">
+    <div>Projects</div><div>Artifacts</div><div>Scheduled</div><div>Customize</div><div>Pinned</div>
+    <a href="/chat/1">Older chat</a>
+  </nav>
+  <header><button aria-label="Share conversation">Share</button></header>
+  <main>
+    <div data-test-render-count="1" data-message-id="user-1">
+      <div data-testid="user-message">
+        <p>Build both outputs.</p>
+        <a data-testid="file-attachment" aria-label="audit-notes.md"
+           href="data:text/markdown,%23%20Audit%20Notes%0A%0A-%20one%0A-%20two%0A%0A%60%60%60python%0Aprint(%22ok%22)%0A%60%60%60">
+          audit-notes.md
+        </a>
+      </div>
+    </div>
+    <div data-test-render-count="2" data-message-id="answer-1">
+      <div class="font-claude-response" data-is-streaming="false">
+        <p>Answer text.</p>
+        <button class="artifact-card-shell" data-cgx-fixture-artifact="report">Research report</button>
+        <button class="artifact-card-shell" data-cgx-fixture-artifact="code">app.py</button>
+      </div>
+    </div>
+  </main>
+  <aside class="right-side-artifact-panel" hidden>
+    <div data-testid="artifact-content"></div>
+  </aside>
+</body></html>

@@ -143,3 +143,32 @@ test('version is consistent across manifest, package and popup', () => {
   assert.ok(!/V0\.\d/.test(readSource('popup.html')),
     'popup must read its version from the manifest, not hard-code it');
 });
+
+
+test('settings diagnostics surface effective export settings and artifact capture state', () => {
+  const options = readSource('options.js');
+  assert.match(options, /effectiveSettings/,
+    'Settings diagnostics must show whether artifact export is effectively enabled');
+  assert.match(options, /artifactDiagnostics/,
+    'Settings diagnostics must show artifact capture counts and failure reasons');
+});
+
+
+test('attachment capture failures are rendered into the exported conversation', () => {
+  const content = readSource('content.js');
+  assert.match(content, /__cgxAttachmentFailure/,
+    'attachment failure metadata must reach the generic attachment-to-IR boundary');
+  assert.match(content, /could not be read/i,
+    'the exported document must explain an unreadable text attachment instead of emitting a blank label');
+});
+
+
+test('privileged text-attachment fetch is narrowly allowlisted and size bounded', () => {
+  const background = readSource('background.js');
+  assert.match(background, /CGX_FETCH_TEXT_ATTACHMENT/);
+  assert.match(background, /oaiusercontent\.com/);
+  assert.match(background, /oaistatic\.com/);
+  assert.match(background, /4 \* 1024 \* 1024/);
+  assert.ok(!/fetch\(request\.url/.test(background),
+    'service worker must validate/canonicalize an attachment URL before privileged fetch');
+});

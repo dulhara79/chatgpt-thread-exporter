@@ -7,6 +7,7 @@
   const DOWNLOAD_MESSAGE = 'CGX_DOWNLOAD_PDF';
   const RENDER_FINISHED_MESSAGE = 'CGX_PDF_RENDER_FINISHED';
   const DOWNLOAD_STATE_MESSAGE = 'CGX_OFFSCREEN_DOWNLOAD_STATE';
+  const FETCH_TEXT_ATTACHMENT_MESSAGE = 'CGX_FETCH_TEXT_ATTACHMENT';
   const WATCHDOG_ALARM = 'cgx-pdf-render-watchdog';
   const WATCHDOG_MS = 45000;
 
@@ -127,6 +128,80 @@
     };
   }
 
+  const MAX_TEXT_ATTACHMENT_BYTES = 4 * 1024 * 1024;
+  const TEXT_ATTACHMENT_TIMEOUT_MS = 8000;
+  const TEXT_ATTACHMENT_EXT = /\.(?:txt|md|markdown|mdown|mkd|csv|tsv|json|jsonl|ya?ml|toml|ini|cfg|conf|log|xml|html?|css|scss|less|js|jsx|mjs|cjs|ts|tsx|py|rb|php|java|kt|kts|go|rs|c|h|cc|cpp|cxx|hpp|cs|swift|scala|sh|bash|zsh|fish|ps1|sql|r|lua|pl|pm|patch|diff|tex)$/i;
+
+  function allowedTextAttachmentUrl(raw) {
+    let url;
+    try { url = new URL(String(raw || '')); } catch { return null; }
+    if (url.protocol !== 'https:') return null;
+
+    const host = url.hostname.toLowerCase();
+    const allowed =
+      host === 'chatgpt.com' ||
+      host === 'chat.openai.com' ||
+      host.endsWith('.oaiusercontent.com') ||
+      host.endsWith('.oaistatic.com');
+
+    return allowed ? url : null;
+  }
+
+  async function fetchTextAttachment(request) {
+    const url = allowedTextAttachmentUrl(request?.url);
+    if (!url) return { ok: false, error: 'attachment-url-not-allowed' };
+
+    const requestedName = String(request?.filename || '');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TEXT_ATTACHMENT_TIMEOUT_MS);
+
+    try {
+      const firstParty = url.hostname === 'chatgpt.com' || url.hostname === 'chat.openai.com';
+      const response = await fetch(url.href, {
+        credentials: firstParty ? 'include' : 'omit',
+        referrerPolicy: 'no-referrer',
+        signal: controller.signal
+      });
+      if (!response.ok) return { ok: false, error: 'http-' + response.status };
+
+      const declared = Number(response.headers.get('content-length') || 0);
+      if (declared > MAX_TEXT_ATTACHMENT_BYTES) {
+        return { ok: false, error: 'attachment-too-large' };
+      }
+
+      const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+      const disposition = String(response.headers.get('content-disposition') || '');
+      const dispositionName = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(disposition)?.[1] || '';
+      const textLikeName = TEXT_ATTACHMENT_EXT.test(requestedName) ||
+        TEXT_ATTACHMENT_EXT.test(url.pathname) ||
+        TEXT_ATTACHMENT_EXT.test(decodeURIComponent(dispositionName));
+
+      const textLikeType =
+        /^text\//i.test(contentType) ||
+        /(json|javascript|xml|yaml|markdown|csv)/i.test(contentType) ||
+        (!contentType || /application\/octet-stream/i.test(contentType)) && textLikeName;
+
+      if (!textLikeType) return { ok: false, error: 'attachment-not-text' };
+
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (!bytes.length) return { ok: false, error: 'attachment-empty' };
+      if (bytes.length > MAX_TEXT_ATTACHMENT_BYTES) {
+        return { ok: false, error: 'attachment-too-large' };
+      }
+
+      const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+      if (!text.trim()) return { ok: false, error: 'attachment-empty' };
+      return { ok: true, text };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error?.name === 'AbortError' ? 'attachment-fetch-timeout' : 'attachment-fetch-failed'
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function forwardDownloadState(delta) {
     const state = delta?.state?.current;
     if (!Number.isInteger(delta?.id) || (state !== 'complete' && state !== 'interrupted')) return;
@@ -162,6 +237,16 @@
 
   chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     if (request?.target === 'cgx-offscreen-pdf') return;
+
+    if (request?.type === FETCH_TEXT_ATTACHMENT_MESSAGE) {
+      fetchTextAttachment(request)
+        .then(sendResponse)
+        .catch(error => sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+      return true;
+    }
 
     if (request?.type === PREPARE_MESSAGE) {
       prepareRenderer()
